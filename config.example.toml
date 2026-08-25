@@ -1,0 +1,29 @@
+# Copy to ~/.config/lego-manual-downloader/config.toml and fill in your credentials,
+# or pass a path explicitly with --config.
+#
+# Only the credentials are required. Every commented-out key below shows its
+# default; uncomment one only to override it. Keys may be written with hyphens
+# or underscores -- `base-url` and `base_url` are equivalent.
+
+[brickset]
+username = "your_brickset_username"
+password = "your_brickset_password"
+# base-url = "https://brickset.com"
+# owned-sets-url = "/exportscripts/sets/owned/"
+# instructions-url = "/exportscripts/instructions"
+
+[peeron]
+username = "your_peeron_username"
+password = "your_peeron_password"
+# login-url = "http://peeron.com/cgi-bin/invcgis/login"
+# scans-url = "http://peeron.com/scans/"
+# thumbs-url = "http://belay.peeron.com/thumbs"
+
+# Providers are tried in order; the first that succeeds wins. Drop "peeron"
+# from manual-providers if you do not have a Peeron account.
+# [providers]
+# owned-sets-providers = ["brickset"]
+# manual-providers = ["brickset", "peeron"]
+
+# [db]
+# file = "_lmd_db.json"

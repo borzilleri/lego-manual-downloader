@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = 'lego-manual-downloader'
+description = 'A tool to download Lego instruction manuals from various sources.'
+readme = 'README.md'
+keywords = ['lego', 'manuals', 'instructions']
+authors = [
+  { name = "Jonathan Borzilleri", email = "jonathan@borzilleri.net" }
+]
+requires-python = ">=3.11"
+dynamic = [
+  "version"
+]
+dependencies = [
+  "beautifulsoup4[html5lib]~=4.12",
+  "pathvalidate~=3.3",
+  "pillow~=10.2",
+  "requests~=2.31",
+]
+
+[project.scripts]
+lego-manual-downloader = "lego_manual_downloader.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
