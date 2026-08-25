@@ -21,6 +21,19 @@ dependencies = [
   "requests~=2.31",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest~=8.3",
+  "pytest-cov~=6.0",
+  "responses~=0.25",
+  "ruff~=0.8",
+  "mypy~=1.13",
+  "types-requests",
+  "types-beautifulsoup4",
+  "types-html5lib",
+  "types-Pillow",
+]
+
 [project.scripts]
 lego-manual-downloader = "lego_manual_downloader.cli:main"
 
@@ -30,3 +43,33 @@ where = ["src"]
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["env"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lego_manual_downloader", "conftest"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+exclude = ["env"]
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["lego_manual_downloader"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80

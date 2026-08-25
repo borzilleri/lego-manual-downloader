@@ -1,8 +1,8 @@
+import tomllib
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from pathlib import Path
 from types import UnionType
 from typing import Any, TypeVar, Union, cast, get_args, get_origin, get_type_hints
-import tomllib
 
 _DEFAULT_CONFIG_PATH = Path("~/.config/lego-manual-downloader/config.toml")
 
@@ -41,9 +41,7 @@ def _bind(cls: type[T], data: dict[str, Any], where: str = "") -> T:
         location = f"{where}.{key}" if where else key
         if name not in known:
             expected = ", ".join(sorted(_display(k) for k in known))
-            raise ConfigError(
-                f"unknown config key '{location}'; expected one of: {expected}"
-            )
+            raise ConfigError(f"unknown config key '{location}'; expected one of: {expected}")
 
         target = _unwrap_optional(hints[name])
         if is_dataclass(target):
@@ -60,9 +58,7 @@ def _bind(cls: type[T], data: dict[str, Any], where: str = "") -> T:
     missing = [
         name
         for name, f in known.items()
-        if name not in kwargs
-        and f.default is MISSING
-        and f.default_factory is MISSING
+        if name not in kwargs and f.default is MISSING and f.default_factory is MISSING
     ]
     if missing:
         listed = ", ".join(_display(name) for name in sorted(missing))

@@ -1,12 +1,15 @@
-from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider
-from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.config import Config, BricksetConfig
-from lego_manual_downloader.http import new_session
 import csv
-import requests
-import bs4
 from functools import cached_property
 from pathlib import Path
+from urllib.parse import urljoin
+
+import bs4
+import requests
+
+from lego_manual_downloader.config import BricksetConfig, Config
+from lego_manual_downloader.http import new_session
+from lego_manual_downloader.lego import LegoSet
+from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider
 
 _LOGIN_URL = "/login"
 _LOGIN_FORM_ID = "aspnetForm"
@@ -43,9 +46,7 @@ def _build_login_payload(form: bs4.Tag, username: str, password: str) -> dict[st
 
     missing = {"username", "password"} - filled
     if missing:
-        raise BricksetLoginError(
-            f"Brickset login form has no {' or '.join(sorted(missing))} field"
-        )
+        raise BricksetLoginError(f"Brickset login form has no {' or '.join(sorted(missing))} field")
     return payload
 
 
@@ -59,34 +60,30 @@ def _find_error_message(html: str) -> str:
 
 
 class Brickset(OwnedSetsProvider, ManualProvider):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         if config.brickset is None:
             raise ValueError("Brickset provider requires 'brickset' section in config")
         self.config: BricksetConfig = config.brickset
-        self.owned_sets_url = self.config.base_url + self.config.owned_sets_url
-        self.instructions_url = self.config.base_url + self.config.instructions_url
+        self.owned_sets_url = urljoin(self.config.base_url, self.config.owned_sets_url)
+        self.instructions_url = urljoin(self.config.base_url, self.config.instructions_url)
 
     @cached_property
     def session(self) -> requests.Session:
         """Return a requests.Session object with the Brickset auth cookie set."""
         if not self.config.username or not self.config.password:
-            raise ValueError(
-                "Brickset provider requires 'username' and 'password' in config"
-            )
+            raise ValueError("Brickset provider requires 'username' and 'password' in config")
         return self.login(self.config.username, self.config.password)
 
-    def login(self, username: str, password: str):
+    def login(self, username: str, password: str) -> requests.Session:
         "Login to brickset.com and return a session with the auth cookie."
         session = new_session()
 
-        login_url = self.config.base_url + _LOGIN_URL
+        login_url = urljoin(self.config.base_url, _LOGIN_URL)
         login_page = session.get(login_url)
         login_page.raise_for_status()
 
-        form = bs4.BeautifulSoup(login_page.text, "html5lib").find(
-            "form", id=_LOGIN_FORM_ID
-        )
-        if form is None:
+        form = bs4.BeautifulSoup(login_page.text, "html5lib").find("form", id=_LOGIN_FORM_ID)
+        if not isinstance(form, bs4.Tag):
             raise BricksetLoginError(f"No form #{_LOGIN_FORM_ID} at {_LOGIN_URL}")
 
         payload = _build_login_payload(form, username, password)

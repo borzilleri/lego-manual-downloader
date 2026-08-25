@@ -1,14 +1,16 @@
-from lego_manual_downloader.providers import ManualProvider
-from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.config import Config, PeeronConfig
-from lego_manual_downloader.http import new_session
-from urllib.parse import urlsplit
-import bs4
 import io
-import requests
-from PIL import Image
 from functools import cached_property
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
+
+import bs4
+import requests
+from PIL import Image
+
+from lego_manual_downloader.config import Config, PeeronConfig
+from lego_manual_downloader.http import new_session
+from lego_manual_downloader.lego import LegoSet
+from lego_manual_downloader.providers import ManualProvider
 
 _AUTH_COOKIE = "PeeronSID"
 
@@ -18,7 +20,7 @@ class PeeronLoginError(Exception):
 
 
 class Peeron(ManualProvider):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         if config.peeron is None:
             raise ValueError("Peeron provider requires 'peeron' section in config")
         self.config: PeeronConfig = config.peeron
@@ -59,7 +61,7 @@ class Peeron(ManualProvider):
         return session
 
     def get_url(self, set_number: str) -> str:
-        return f"{self.config.scans_url}/{set_number}/"
+        return urljoin(self.config.scans_url, f"{set_number}/")
 
     def get_page_scan_urls(self, set_number: str) -> list[str]:
         r = self.session.get(self.get_url(set_number))
@@ -73,7 +75,7 @@ class Peeron(ManualProvider):
         r.raise_for_status()
         return Image.open(io.BytesIO(r.content))
 
-    def download_pdf(self, scan_urls: list[str], output_path: Path):
+    def download_pdf(self, scan_urls: list[str], output_path: Path) -> None:
         cover_img = self.download_image(scan_urls[0])
         cover_img.save(
             output_path,

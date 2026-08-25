@@ -1,9 +1,13 @@
-from lego_manual_downloader.brickset import Brickset
-from lego_manual_downloader.peeron import Peeron
-from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider, ProviderInit
-from lego_manual_downloader.config import Config, ConfigError
 from pathlib import Path
+from typing import Any, TypeVar
+
+from lego_manual_downloader.brickset import Brickset
+from lego_manual_downloader.config import Config, ConfigError
+from lego_manual_downloader.lego import LegoSet
+from lego_manual_downloader.peeron import Peeron
+from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider, ProviderInit
+
+P = TypeVar("P")
 
 _provider_registry: dict[str, type[ProviderInit]] = {
     "brickset": Brickset,
@@ -11,9 +15,9 @@ _provider_registry: dict[str, type[ProviderInit]] = {
 }
 
 
-def _build_providers(config: Config, names: list[str]) -> dict[str, object]:
+def _build_providers(config: Config, names: list[str]) -> dict[str, Any]:
     """Instantiate each named provider once, skipping any that cannot be configured."""
-    instances: dict[str, object] = {}
+    instances: dict[str, Any] = {}
     for name in dict.fromkeys(names):
         provider_class = _provider_registry.get(name)
         if provider_class is None:
@@ -26,8 +30,15 @@ def _build_providers(config: Config, names: list[str]) -> dict[str, object]:
     return instances
 
 
-def _select_providers(names: list[str], instances: dict[str, object], role: type, label: str) -> list:
-    selected = []
+def _select_providers(
+    names: list[str], instances: dict[str, Any], role: type[P], label: str
+) -> list[P]:
+    """Pick the instances that implement `role`, warning about those that do not.
+
+    `role` is only ever used for isinstance, never instantiated, so the abstract
+    provider base classes are valid arguments here.
+    """
+    selected: list[P] = []
     for name in names:
         provider = instances.get(name)
         if provider is None:
@@ -40,7 +51,9 @@ def _select_providers(names: list[str], instances: dict[str, object], role: type
 
 
 class ProviderFactory:
-    def __init__(self, sets_providers: list[OwnedSetsProvider], manual_providers: list[ManualProvider]):
+    def __init__(
+        self, sets_providers: list[OwnedSetsProvider], manual_providers: list[ManualProvider]
+    ) -> None:
         self.sets_providers = sets_providers
         self.manual_providers = manual_providers
 
@@ -60,7 +73,8 @@ class ProviderFactory:
                 if provider.download_manual(lego_set, output_path):
                     return True
             except Exception as e:
-                print(f"Error downloading manual for {lego_set.number} from {type(provider).__name__}: {e}")
+                name = type(provider).__name__
+                print(f"Error downloading manual for {lego_set.number} from {name}: {e}")
         return False
 
     @staticmethod
@@ -69,8 +83,18 @@ class ProviderFactory:
         manual_provider_names = [n.lower() for n in config.providers.manual_providers]
 
         instances = _build_providers(config, sets_provider_names + manual_provider_names)
-        sets_providers = _select_providers(sets_provider_names, instances, OwnedSetsProvider, "owned sets")
-        manual_providers = _select_providers(manual_provider_names, instances, ManualProvider, "manual")
+        sets_providers = _select_providers(
+            sets_provider_names,
+            instances,
+            OwnedSetsProvider,  # type: ignore[type-abstract]  # isinstance only
+            "owned sets",
+        )
+        manual_providers = _select_providers(
+            manual_provider_names,
+            instances,
+            ManualProvider,  # type: ignore[type-abstract]  # isinstance only
+            "manual",
+        )
         if not sets_providers:
             raise ConfigError("no usable owned sets providers configured")
         if not manual_providers:

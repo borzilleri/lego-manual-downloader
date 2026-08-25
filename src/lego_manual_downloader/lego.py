@@ -1,5 +1,6 @@
-import pathvalidate
 from dataclasses import dataclass
+
+import pathvalidate
 
 
 @dataclass(frozen=True)
@@ -10,6 +11,4 @@ class LegoSet:
 
     @property
     def file_name(self) -> str:
-        return pathvalidate.sanitize_filename(
-            f"{self.number} {self.name} ({self.year}).pdf"
-        )
+        return pathvalidate.sanitize_filename(f"{self.number} {self.name} ({self.year}).pdf")
