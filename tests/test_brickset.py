@@ -1,8 +1,8 @@
-import re
 from pathlib import Path
 
 import bs4
 import pytest
+import requests
 import responses
 
 from conftest import BRICKSET_BASE, INSTRUCTIONS_CSV, LOGIN_FORM_HTML, OWNED_SETS_CSV
@@ -14,10 +14,18 @@ from lego_manual_downloader.brickset import (
 )
 from lego_manual_downloader.config import BricksetConfig, Config
 from lego_manual_downloader.lego import LegoSet
+from lego_manual_downloader.providers import ProviderUnavailable
 
 LOGIN_URL = f"{BRICKSET_BASE}/login"
 OWNED_URL = f"{BRICKSET_BASE}/exportscripts/sets/owned/"
 INSTRUCTIONS_URL = f"{BRICKSET_BASE}/exportscripts/instructions"
+
+
+def _body(raw: object) -> str:
+    """responses records a request body as bytes or str depending on the call."""
+    if isinstance(raw, bytes):
+        return raw.decode()
+    return raw if isinstance(raw, str) else ""
 
 
 @pytest.fixture
@@ -125,56 +133,63 @@ class TestLogin:
         responses.post(LOGIN_URL, body="ok", headers={"Set-Cookie": ".ASPXAUTH=token; Path=/"})
 
         _ = brickset.session
-        posted = responses.calls[1].request.body or ""
+        posted = _body(responses.calls[1].request.body)
         assert "__VIEWSTATE=abc123" in posted
         assert "Username=user" in posted
 
     @responses.activate
     def test_missing_form_raises(self, brickset: Brickset) -> None:
         responses.get(LOGIN_URL, body="<html><body>no form here</body></html>")
-        with pytest.raises(BricksetLoginError, match="aspnetForm"):
+        with pytest.raises(ProviderUnavailable, match="brickset login failed") as excinfo:
             _ = brickset.session
+        assert "aspnetForm" in str(excinfo.value.__cause__)
 
     @responses.activate
     def test_absent_auth_cookie_raises_with_the_site_message(self, brickset: Brickset) -> None:
         responses.get(LOGIN_URL, body=LOGIN_FORM_HTML)
         responses.post(LOGIN_URL, body='<div class="error">Bad password.</div>')
-        with pytest.raises(BricksetLoginError, match=re.escape("Bad password.")):
+        with pytest.raises(ProviderUnavailable, match="brickset login failed") as excinfo:
             _ = brickset.session
+        assert "Bad password." in str(excinfo.value.__cause__)
 
     @responses.activate
-    def test_http_error_propagates(self, brickset: Brickset) -> None:
+    def test_http_error_is_wrapped(self, brickset: Brickset) -> None:
         responses.get(LOGIN_URL, status=503)
-        with pytest.raises(Exception):  # noqa: B017 - requests.HTTPError
+        with pytest.raises(ProviderUnavailable, match="brickset login failed") as excinfo:
             _ = brickset.session
+        assert isinstance(excinfo.value.__cause__, requests.HTTPError)
 
-    def test_blank_credentials_raise_before_any_request(self) -> None:
+    def test_blank_credentials_rejected_at_construction(self) -> None:
         config = Config(brickset=BricksetConfig(username="", password=""))
         with pytest.raises(ValueError, match="username"):
-            _ = Brickset(config).session
+            Brickset(config)
 
 
 class TestOwnedSets:
     def test_parses_the_export_csv(self, brickset: Brickset) -> None:
-        brickset.session = FakeSession({OWNED_URL: FakeResponse(text=OWNED_SETS_CSV)})  # type: ignore[assignment]
+        brickset._login_result = FakeSession({OWNED_URL: FakeResponse(text=OWNED_SETS_CSV)})  # type: ignore[assignment]
         assert brickset.get_owned_sets() == [
             LegoSet("10179", "Millennium Falcon", "2007"),
             LegoSet("6080", "King's Castle", "1984"),
         ]
 
     def test_empty_csv_yields_no_sets(self, brickset: Brickset) -> None:
-        brickset.session = FakeSession({OWNED_URL: FakeResponse(text="Number,Set name,Year\n")})  # type: ignore[assignment]
+        brickset._login_result = FakeSession(
+            {OWNED_URL: FakeResponse(text="Number,Set name,Year\n")}
+        )  # type: ignore[assignment]
         assert brickset.get_owned_sets() == []
 
 
 class TestInstructions:
     def test_maps_set_numbers_to_urls_skipping_blanks(self, brickset: Brickset) -> None:
-        brickset.session = FakeSession({INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)})  # type: ignore[assignment]
+        brickset._login_result = FakeSession(
+            {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
+        )  # type: ignore[assignment]
         assert brickset.instructions == {"10179": "https://lego.example/10179.pdf"}
 
     def test_is_fetched_only_once(self, brickset: Brickset) -> None:
         session = FakeSession({INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)})
-        brickset.session = session  # type: ignore[assignment]
+        brickset._login_result = session  # type: ignore[assignment]
         _ = brickset.instructions
         _ = brickset.instructions
         assert session.requested == [INSTRUCTIONS_URL]
@@ -183,7 +198,7 @@ class TestInstructions:
 class TestDownloadManual:
     def test_writes_the_pdf_and_reports_success(self, brickset: Brickset, tmp_path: Path) -> None:
         pdf_url = "https://lego.example/10179.pdf"
-        brickset.session = FakeSession(  # type: ignore[assignment]
+        brickset._login_result = FakeSession(  # type: ignore[assignment]
             {
                 INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV),
                 pdf_url: FakeResponse(content=b"%PDF-1.4 payload"),
@@ -196,11 +211,74 @@ class TestDownloadManual:
     def test_unknown_set_returns_false_without_writing(
         self, brickset: Brickset, tmp_path: Path
     ) -> None:
-        brickset.session = FakeSession({INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)})  # type: ignore[assignment]
+        brickset._login_result = FakeSession(
+            {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
+        )  # type: ignore[assignment]
         output = tmp_path / "out.pdf"
         assert not brickset.download_manual(LegoSet("0000", "Nope", "1999"), output)
         assert not output.exists()
 
     def test_set_with_blank_url_returns_false(self, brickset: Brickset, tmp_path: Path) -> None:
-        brickset.session = FakeSession({INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)})  # type: ignore[assignment]
+        brickset._login_result = FakeSession(
+            {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
+        )  # type: ignore[assignment]
         assert not brickset.download_manual(LegoSet("6080", "Castle", "1984"), tmp_path / "o.pdf")
+
+
+class TestLoginIsAttemptedOnce:
+    """cached_property does not cache exceptions, so a raising login would retry
+    once per set. These guard the caching of the failure, not just the success."""
+
+    @staticmethod
+    def counting_login(brickset: Brickset, outcome: object) -> list[int]:
+        calls: list[int] = []
+
+        def fake_login() -> requests.Session:
+            calls.append(1)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome  # type: ignore[return-value]
+
+        brickset.login = fake_login  # type: ignore[method-assign]
+        return calls
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            BricksetLoginError("rejected"),
+            requests.HTTPError("500 from brickset"),
+            requests.ConnectionError("offline"),
+            requests.Timeout("slow"),
+        ],
+        ids=["login-error", "http-error", "connection-error", "timeout"],
+    )
+    def test_failed_login_is_attempted_once(self, brickset: Brickset, failure: Exception) -> None:
+        calls = self.counting_login(brickset, failure)
+        for _ in range(5):
+            with pytest.raises(ProviderUnavailable):
+                _ = brickset.session
+        assert len(calls) == 1
+
+    def test_successful_login_is_attempted_once(self, brickset: Brickset) -> None:
+        calls = self.counting_login(brickset, requests.Session())
+        for _ in range(5):
+            assert isinstance(brickset.session, requests.Session)
+        assert len(calls) == 1
+
+    def test_failure_is_reported_once_not_per_access(
+        self, brickset: Brickset, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.counting_login(brickset, requests.ConnectionError("offline"))
+        for _ in range(5):
+            with pytest.raises(ProviderUnavailable):
+                _ = brickset.session
+        assert capsys.readouterr().out.count("brickset: login failed") == 1
+
+    def test_download_manual_raises_unavailable_without_retrying(
+        self, brickset: Brickset, tmp_path: Path
+    ) -> None:
+        calls = self.counting_login(brickset, requests.ConnectionError("offline"))
+        for n in range(5):
+            with pytest.raises(ProviderUnavailable):
+                brickset.download_manual(LegoSet(str(n), "Set", "2001"), tmp_path / "x.pdf")
+        assert len(calls) == 1

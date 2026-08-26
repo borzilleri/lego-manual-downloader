@@ -9,7 +9,11 @@ import requests
 from lego_manual_downloader.config import BricksetConfig, Config
 from lego_manual_downloader.http import new_session
 from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider
+from lego_manual_downloader.providers import (
+    AuthenticatedProvider,
+    ManualProvider,
+    OwnedSetsProvider,
+)
 
 _LOGIN_URL = "/login"
 _LOGIN_FORM_ID = "aspnetForm"
@@ -59,22 +63,19 @@ def _find_error_message(html: str) -> str:
     return "Brickset rejected the credentials"
 
 
-class Brickset(OwnedSetsProvider, ManualProvider):
+class Brickset(AuthenticatedProvider, OwnedSetsProvider, ManualProvider):
+    label = "brickset"
+
     def __init__(self, config: Config) -> None:
         if config.brickset is None:
             raise ValueError("Brickset provider requires 'brickset' section in config")
+        if not config.brickset.username or not config.brickset.password:
+            raise ValueError("Brickset provider requires 'username' and 'password' in config")
         self.config: BricksetConfig = config.brickset
         self.owned_sets_url = urljoin(self.config.base_url, self.config.owned_sets_url)
         self.instructions_url = urljoin(self.config.base_url, self.config.instructions_url)
 
-    @cached_property
-    def session(self) -> requests.Session:
-        """Return a requests.Session object with the Brickset auth cookie set."""
-        if not self.config.username or not self.config.password:
-            raise ValueError("Brickset provider requires 'username' and 'password' in config")
-        return self.login(self.config.username, self.config.password)
-
-    def login(self, username: str, password: str) -> requests.Session:
+    def login(self) -> requests.Session:
         "Login to brickset.com and return a session with the auth cookie."
         session = new_session()
 
@@ -86,7 +87,7 @@ class Brickset(OwnedSetsProvider, ManualProvider):
         if not isinstance(form, bs4.Tag):
             raise BricksetLoginError(f"No form #{_LOGIN_FORM_ID} at {_LOGIN_URL}")
 
-        payload = _build_login_payload(form, username, password)
+        payload = _build_login_payload(form, self.config.username, self.config.password)
         response = session.post(
             login_url,
             data=payload,

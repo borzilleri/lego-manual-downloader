@@ -2,6 +2,7 @@ import io
 from pathlib import Path
 
 import pytest
+import requests
 import responses
 from PIL import Image
 
@@ -9,6 +10,7 @@ from conftest import PEERON_LOGIN, PEERON_SCANS, PEERON_THUMBS
 from lego_manual_downloader.config import Config, PeeronConfig
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.peeron import Peeron, PeeronLoginError
+from lego_manual_downloader.providers import ProviderUnavailable
 
 SET_PAGE_URL = f"{PEERON_SCANS}10179/"
 
@@ -22,6 +24,13 @@ def png_bytes(color: str = "red", size: tuple[int, int] = (20, 20)) -> bytes:
 def scans_page(*thumb_urls: str) -> str:
     imgs = "".join(f'<img src="{url}" />' for url in thumb_urls)
     return f"<html><body>{imgs}</body></html>"
+
+
+def _body(raw: object) -> str:
+    """responses records a request body as bytes or str depending on the call."""
+    if isinstance(raw, bytes):
+        return raw.decode()
+    return raw if isinstance(raw, str) else ""
 
 
 @pytest.fixture
@@ -76,26 +85,27 @@ class TestLogin:
     def test_login_posts_the_credentials(self, peeron: Peeron) -> None:
         responses.post(PEERON_LOGIN, body="ok", headers={"Set-Cookie": "PeeronSID=abc; Path=/"})
         _ = peeron.session
-        posted = responses.calls[0].request.body or ""
+        posted = _body(responses.calls[0].request.body)
         assert "user=user" in posted
         assert "pass=pass" in posted
 
     @responses.activate
     def test_absent_cookie_raises(self, peeron: Peeron) -> None:
         responses.post(PEERON_LOGIN, body="login failed")
-        with pytest.raises(PeeronLoginError, match="rejected the credentials"):
+        with pytest.raises(ProviderUnavailable, match="peeron login failed") as excinfo:
             _ = peeron.session
+        assert "rejected the credentials" in str(excinfo.value.__cause__)
 
-    def test_blank_credentials_raise_before_any_request(self) -> None:
+    def test_blank_credentials_rejected_at_construction(self) -> None:
         config = Config(peeron=PeeronConfig(username="", password=""))
         with pytest.raises(ValueError, match="username"):
-            _ = Peeron(config).session
+            Peeron(config)
 
 
 class TestGetPageScanUrls:
     def test_rewrites_thumb_urls_to_scan_urls(self, peeron: Peeron) -> None:
         html = scans_page(f"{PEERON_THUMBS}/10179/1.png", f"{PEERON_THUMBS}/10179/2.png")
-        peeron.session = FakeSession({SET_PAGE_URL: FakeResponse(text=html)})  # type: ignore[assignment]
+        peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=html)})  # type: ignore[assignment]
         assert peeron.get_page_scan_urls("10179") == [
             f"{PEERON_THUMBS.replace('thumbs', 'scans')}/10179/1.png",
             f"{PEERON_THUMBS.replace('thumbs', 'scans')}/10179/2.png",
@@ -103,18 +113,18 @@ class TestGetPageScanUrls:
 
     def test_ignores_images_from_other_hosts(self, peeron: Peeron) -> None:
         html = scans_page("http://elsewhere.example/logo.png", f"{PEERON_THUMBS}/10179/1.png")
-        peeron.session = FakeSession({SET_PAGE_URL: FakeResponse(text=html)})  # type: ignore[assignment]
+        peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=html)})  # type: ignore[assignment]
         assert len(peeron.get_page_scan_urls("10179")) == 1
 
     def test_page_without_scans_yields_empty_list(self, peeron: Peeron) -> None:
-        peeron.session = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
+        peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
         assert peeron.get_page_scan_urls("10179") == []
 
 
 class TestDownloadPdf:
     def test_builds_a_multi_page_pdf_from_the_scans(self, peeron: Peeron, tmp_path: Path) -> None:
         urls = [f"{PEERON_SCANS}p{n}.png" for n in range(3)]
-        peeron.session = FakeSession(  # type: ignore[assignment]
+        peeron._login_result = FakeSession(  # type: ignore[assignment]
             {url: FakeResponse(content=png_bytes()) for url in urls}
         )
         output = tmp_path / "manual.pdf"
@@ -125,7 +135,7 @@ class TestDownloadPdf:
 
     def test_single_scan_produces_a_pdf(self, peeron: Peeron, tmp_path: Path) -> None:
         url = f"{PEERON_SCANS}only.png"
-        peeron.session = FakeSession({url: FakeResponse(content=png_bytes())})  # type: ignore[assignment]
+        peeron._login_result = FakeSession({url: FakeResponse(content=png_bytes())})  # type: ignore[assignment]
         output = tmp_path / "manual.pdf"
         peeron.download_pdf([url], output)
         assert output.read_bytes().startswith(b"%PDF")
@@ -135,7 +145,7 @@ class TestDownloadManual:
     def test_returns_false_and_writes_nothing_when_no_scans(
         self, peeron: Peeron, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        peeron.session = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
+        peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
         output = tmp_path / "manual.pdf"
         assert not peeron.download_manual(LegoSet("10179", "Falcon", "2007"), output)
         assert not output.exists()
@@ -144,7 +154,7 @@ class TestDownloadManual:
     def test_writes_a_pdf_and_reports_success(self, peeron: Peeron, tmp_path: Path) -> None:
         thumb = f"{PEERON_THUMBS}/10179/1.png"
         scan = thumb.replace("thumbs", "scans")
-        peeron.session = FakeSession(  # type: ignore[assignment]
+        peeron._login_result = FakeSession(  # type: ignore[assignment]
             {
                 SET_PAGE_URL: FakeResponse(text=scans_page(thumb)),
                 scan: FakeResponse(content=png_bytes()),
@@ -153,3 +163,61 @@ class TestDownloadManual:
         output = tmp_path / "manual.pdf"
         assert peeron.download_manual(LegoSet("10179", "Falcon", "2007"), output)
         assert output.read_bytes().startswith(b"%PDF")
+
+
+class TestLoginIsAttemptedOnce:
+    """Mirror of the Brickset guards: a failed login must not retry per set."""
+
+    @staticmethod
+    def counting_login(peeron: Peeron, outcome: object) -> list[int]:
+        calls: list[int] = []
+
+        def fake_login() -> requests.Session:
+            calls.append(1)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome  # type: ignore[return-value]
+
+        peeron.login = fake_login  # type: ignore[method-assign]
+        return calls
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            PeeronLoginError("rejected"),
+            requests.HTTPError("500 from peeron"),
+            requests.ConnectionError("offline"),
+            requests.Timeout("slow"),
+        ],
+        ids=["login-error", "http-error", "connection-error", "timeout"],
+    )
+    def test_failed_login_is_attempted_once(self, peeron: Peeron, failure: Exception) -> None:
+        calls = self.counting_login(peeron, failure)
+        for _ in range(5):
+            with pytest.raises(ProviderUnavailable):
+                _ = peeron.session
+        assert len(calls) == 1
+
+    def test_successful_login_is_attempted_once(self, peeron: Peeron) -> None:
+        calls = self.counting_login(peeron, requests.Session())
+        for _ in range(5):
+            assert isinstance(peeron.session, requests.Session)
+        assert len(calls) == 1
+
+    def test_failure_is_reported_once_not_per_access(
+        self, peeron: Peeron, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.counting_login(peeron, requests.ConnectionError("offline"))
+        for _ in range(5):
+            with pytest.raises(ProviderUnavailable):
+                _ = peeron.session
+        assert capsys.readouterr().out.count("peeron: login failed") == 1
+
+    def test_download_manual_raises_unavailable_without_retrying(
+        self, peeron: Peeron, tmp_path: Path
+    ) -> None:
+        calls = self.counting_login(peeron, requests.ConnectionError("offline"))
+        for n in range(5):
+            with pytest.raises(ProviderUnavailable):
+                peeron.download_manual(LegoSet(str(n), "Set", "2001"), tmp_path / "x.pdf")
+        assert len(calls) == 1

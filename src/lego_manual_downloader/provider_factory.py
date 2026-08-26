@@ -5,7 +5,12 @@ from lego_manual_downloader.brickset import Brickset
 from lego_manual_downloader.config import Config, ConfigError
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.peeron import Peeron
-from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider, ProviderInit
+from lego_manual_downloader.providers import (
+    ManualProvider,
+    OwnedSetsProvider,
+    ProviderInit,
+    ProviderUnavailable,
+)
 
 P = TypeVar("P")
 
@@ -52,26 +57,42 @@ def _select_providers(
 
 class ProviderFactory:
     def __init__(
-        self, sets_providers: list[OwnedSetsProvider], manual_providers: list[ManualProvider]
+        self,
+        sets_providers: list[OwnedSetsProvider],
+        manual_providers: list[ManualProvider],
     ) -> None:
         self.sets_providers = sets_providers
         self.manual_providers = manual_providers
 
+    @property
+    def has_manual_providers(self) -> bool:
+        return bool(self.manual_providers)
+
+    def _retire(self, provider: object, reason: Exception) -> None:
+        """Drop a provider that reported itself unusable for the rest of the run."""
+        print(f"Dropping {type(provider).__name__} for this run: {reason}")
+        self.sets_providers = [p for p in self.sets_providers if p is not provider]
+        self.manual_providers = [p for p in self.manual_providers if p is not provider]
+
     def get_owned_sets(self) -> list[LegoSet]:
-        for provider in self.sets_providers:
+        for provider in list(self.sets_providers):
             try:
                 owned_sets = provider.get_owned_sets()
                 if owned_sets:
                     return owned_sets
+            except ProviderUnavailable as e:
+                self._retire(provider, e)
             except Exception as e:
                 print(f"Error fetching owned sets from {type(provider).__name__}: {e}")
         return []
 
     def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
-        for provider in self.manual_providers:
+        for provider in list(self.manual_providers):
             try:
                 if provider.download_manual(lego_set, output_path):
                     return True
+            except ProviderUnavailable as e:
+                self._retire(provider, e)
             except Exception as e:
                 name = type(provider).__name__
                 print(f"Error downloading manual for {lego_set.number} from {name}: {e}")
