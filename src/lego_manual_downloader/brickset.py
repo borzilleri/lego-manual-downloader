@@ -7,6 +7,7 @@ import bs4
 import requests
 
 from lego_manual_downloader.config import BricksetConfig, Config
+from lego_manual_downloader.files import atomic_write
 from lego_manual_downloader.http import new_session
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.providers import (
@@ -127,7 +128,7 @@ class Brickset(AuthenticatedProvider, OwnedSetsProvider, ManualProvider):
             return False
         with self.session.get(url, stream=True) as r:
             r.raise_for_status()
-            with output_path.open("wb") as f:
+            with atomic_write(output_path) as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
         return True

@@ -1,3 +1,4 @@
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import bs4
@@ -41,7 +42,7 @@ class FakeResponse:
     def raise_for_status(self) -> None:
         return None
 
-    def iter_content(self, chunk_size: int = 8192) -> list[bytes]:
+    def iter_content(self, chunk_size: int = 8192) -> Iterable[bytes]:
         return [self.content[i : i + chunk_size] for i in range(0, len(self.content), chunk_size)]
 
     def __enter__(self) -> "FakeResponse":
@@ -49,6 +50,14 @@ class FakeResponse:
 
     def __exit__(self, *args: object) -> None:
         return None
+
+
+class DroppedResponse(FakeResponse):
+    """Streams one chunk, then loses the connection."""
+
+    def iter_content(self, chunk_size: int = 8192) -> Iterator[bytes]:
+        yield b"%PDF-1.4 par"
+        raise requests.ConnectionError("dropped mid-download")
 
 
 class FakeSession:
@@ -207,6 +216,22 @@ class TestDownloadManual:
         output = tmp_path / "out.pdf"
         assert brickset.download_manual(LegoSet("10179", "Falcon", "2007"), output)
         assert output.read_bytes() == b"%PDF-1.4 payload"
+
+    def test_dropped_connection_leaves_no_partial_file(
+        self, brickset: Brickset, tmp_path: Path
+    ) -> None:
+        pdf_url = "https://lego.example/10179.pdf"
+        brickset._login_result = FakeSession(  # type: ignore[assignment]
+            {
+                INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV),
+                pdf_url: DroppedResponse(),
+            }
+        )
+        output = tmp_path / "out.pdf"
+        with pytest.raises(requests.ConnectionError):
+            brickset.download_manual(LegoSet("10179", "Falcon", "2007"), output)
+
+        assert not list(tmp_path.iterdir())
 
     def test_unknown_set_returns_false_without_writing(
         self, brickset: Brickset, tmp_path: Path
