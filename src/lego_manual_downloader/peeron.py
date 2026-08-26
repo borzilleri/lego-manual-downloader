@@ -7,6 +7,7 @@ import requests
 from PIL import Image
 
 from lego_manual_downloader.config import Config, PeeronConfig
+from lego_manual_downloader.files import atomic_write
 from lego_manual_downloader.http import new_session
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.providers import AuthenticatedProvider, ManualProvider
@@ -74,13 +75,17 @@ class Peeron(AuthenticatedProvider, ManualProvider):
 
     def download_pdf(self, scan_urls: list[str], output_path: Path) -> None:
         cover_img = self.download_image(scan_urls[0])
-        cover_img.save(
-            output_path,
-            "PDF",
-            resolution=100.0,
-            save_all=True,
-            append_images=(self.download_image(i) for i in scan_urls[1:]),
-        )
+        with atomic_write(output_path) as f:
+            # PIL titles the PDF after the file it is handed, which is now a
+            # temp file, so the real name is passed explicitly.
+            cover_img.save(
+                f,
+                "PDF",
+                resolution=100.0,
+                save_all=True,
+                append_images=(self.download_image(i) for i in scan_urls[1:]),
+                title=output_path.stem,
+            )
 
     def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
         """Download the instruction manual for a given set number to the specified output path."""

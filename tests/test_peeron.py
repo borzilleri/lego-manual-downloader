@@ -133,12 +133,43 @@ class TestDownloadPdf:
         assert output.exists()
         assert output.read_bytes().startswith(b"%PDF")
 
+    def test_a_scan_failing_mid_pdf_leaves_no_partial_file(
+        self, peeron: Peeron, tmp_path: Path
+    ) -> None:
+        """Pages are fetched lazily by PIL during the save, so a later page can fail
+        after the PDF has already been partly written."""
+        urls = [f"{PEERON_SCANS}p{n}.png" for n in range(3)]
+
+        class DroppedSession(FakeSession):
+            def get(self, url: str, **kwargs: object) -> FakeResponse:
+                if url == urls[1]:
+                    raise requests.ConnectionError("dropped mid-manual")
+                return super().get(url, **kwargs)
+
+        peeron._login_result = DroppedSession(  # type: ignore[assignment]
+            {url: FakeResponse(content=png_bytes()) for url in urls}
+        )
+        output = tmp_path / "manual.pdf"
+        with pytest.raises(requests.ConnectionError):
+            peeron.download_pdf(urls, output)
+
+        assert not list(tmp_path.iterdir())
+
     def test_single_scan_produces_a_pdf(self, peeron: Peeron, tmp_path: Path) -> None:
         url = f"{PEERON_SCANS}only.png"
         peeron._login_result = FakeSession({url: FakeResponse(content=png_bytes())})  # type: ignore[assignment]
         output = tmp_path / "manual.pdf"
         peeron.download_pdf([url], output)
         assert output.read_bytes().startswith(b"%PDF")
+
+    def test_pdf_is_titled_after_the_destination_not_the_temp_file(
+        self, peeron: Peeron, tmp_path: Path
+    ) -> None:
+        url = f"{PEERON_SCANS}only.png"
+        peeron._login_result = FakeSession({url: FakeResponse(content=png_bytes())})  # type: ignore[assignment]
+        output = tmp_path / "10179 - Falcon.pdf"
+        peeron.download_pdf([url], output)
+        assert "10179 - Falcon".encode("utf-16-be") in output.read_bytes()
 
 
 class TestDownloadManual:
