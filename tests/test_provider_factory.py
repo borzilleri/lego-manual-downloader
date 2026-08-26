@@ -6,7 +6,11 @@ from lego_manual_downloader import provider_factory
 from lego_manual_downloader.config import BricksetConfig, Config, ConfigError, ProvidersConfig
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.provider_factory import ProviderFactory
-from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider
+from lego_manual_downloader.providers import (
+    ManualProvider,
+    OwnedSetsProvider,
+    ProviderUnavailable,
+)
 
 
 class FakeBoth(OwnedSetsProvider, ManualProvider):
@@ -207,3 +211,118 @@ def test_peeron_requires_its_config_section() -> None:
 
     with pytest.raises(ValueError, match="peeron"):
         Peeron(Config(brickset=BricksetConfig(username="u", password="p")))
+
+
+class Unavailable(OwnedSetsProvider, ManualProvider):
+    """Reports itself permanently unusable, as a dead login does."""
+
+    def __init__(self) -> None:
+        self.sets_calls = 0
+        self.manual_calls = 0
+
+    def get_owned_sets(self) -> list[LegoSet]:
+        self.sets_calls += 1
+        raise ProviderUnavailable("brickset login failed")
+
+    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+        self.manual_calls += 1
+        raise ProviderUnavailable("brickset login failed")
+
+
+class Transient(ManualProvider):
+    """Fails per-set without implying anything about the next set."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+        self.calls += 1
+        raise RuntimeError("404 for this set")
+
+
+class TestRetiresUnavailableProviders:
+    def test_unavailable_provider_is_called_once_across_many_sets(self, tmp_path: Path) -> None:
+        dead = Unavailable()
+        factory = ProviderFactory([], [dead])
+        for n in range(5):
+            assert not factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+        assert dead.manual_calls == 1
+
+    def test_unavailable_provider_is_reported_once(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        factory = ProviderFactory([], [Unavailable()])
+        for n in range(5):
+            factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+        assert capsys.readouterr().out.count("Dropping Unavailable for this run") == 1
+
+    def test_transient_failures_do_not_retire_the_provider(self, tmp_path: Path) -> None:
+        flaky = Transient()
+        factory = ProviderFactory([], [flaky])
+        for n in range(5):
+            assert not factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+        assert flaky.calls == 5
+
+    def test_retired_provider_is_removed_from_both_roles(self, tmp_path: Path) -> None:
+        dead = Unavailable()
+        factory = ProviderFactory([dead], [dead])
+        factory.download_manual(LegoSet("1", "S", "2001"), tmp_path / "x.pdf")
+        assert factory.manual_providers == []
+        assert factory.sets_providers == []
+
+    def test_healthy_provider_still_serves_after_one_is_retired(self, tmp_path: Path) -> None:
+        dead = Unavailable()
+        healthy = FakeBoth(Config())
+        factory = ProviderFactory([], [dead, healthy])
+        for n in range(3):
+            assert factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+        assert dead.manual_calls == 1
+        assert healthy.downloads == ["0", "1", "2"]
+
+    def test_unavailable_sets_provider_is_retired(self) -> None:
+        dead = Unavailable()
+        factory = ProviderFactory([dead, FakeBoth(Config())], [])
+        assert factory.get_owned_sets() == [LegoSet("1", "One", "2001")]
+        factory.get_owned_sets()
+        assert dead.sets_calls == 1
+
+
+class TestHasManualProviders:
+    def test_true_while_a_provider_remains(self) -> None:
+        assert ProviderFactory([], [FakeBoth(Config())]).has_manual_providers
+
+    def test_false_once_empty(self) -> None:
+        assert not ProviderFactory([], []).has_manual_providers
+
+    def test_flips_when_the_last_provider_retires(self, tmp_path: Path) -> None:
+        factory = ProviderFactory([], [Unavailable()])
+        assert factory.has_manual_providers
+        factory.download_manual(LegoSet("1", "S", "2001"), tmp_path / "x.pdf")
+        assert not factory.has_manual_providers
+
+    def test_retiring_an_absent_provider_is_a_no_op(self, tmp_path: Path) -> None:
+        """_retire rebuilds by identity, so a provider already gone is harmless."""
+        keep = FakeBoth(Config())
+        factory = ProviderFactory([keep], [keep])
+        factory._retire(Unavailable(), RuntimeError("never registered"))
+        assert factory.sets_providers == [keep]
+        assert factory.manual_providers == [keep]
+
+    def test_retire_uses_identity_not_equality(self, tmp_path: Path) -> None:
+        """Two equal-but-distinct providers must not both be dropped."""
+
+        class Equal(ManualProvider):
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, Equal)
+
+            def __hash__(self) -> int:
+                return 0
+
+            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+                return False
+
+        first, second = Equal(), Equal()
+        factory = ProviderFactory([], [first, second])
+        factory._retire(first, RuntimeError("dead"))
+        assert factory.manual_providers == [second]
+        assert factory.manual_providers[0] is second

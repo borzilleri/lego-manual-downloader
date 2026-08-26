@@ -13,7 +13,11 @@ from lego_manual_downloader.config import DbConfig
 from lego_manual_downloader.db import ManualDb
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.provider_factory import ProviderFactory
-from lego_manual_downloader.providers import ManualProvider, OwnedSetsProvider
+from lego_manual_downloader.providers import (
+    ManualProvider,
+    OwnedSetsProvider,
+    ProviderUnavailable,
+)
 
 SETS = [
     LegoSet("10179", "Millennium Falcon", "2007"),
@@ -189,3 +193,41 @@ class TestMain:
 
         assert main([str(tmp_path), "--config", str(config)]) == 1
         assert "Error loading database" in capsys.readouterr().out
+
+
+class TestStopsWhenProvidersExhausted:
+    def test_loop_exits_once_the_last_provider_retires(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class Dead(ManualProvider):
+            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+                raise ProviderUnavailable("login failed")
+
+        many = [LegoSet(str(n), f"Set {n}", "2001") for n in range(20)]
+        factory = ProviderFactory([], [Dead()])
+        process_owned_sets(many, tmp_path, ManualDb.load(tmp_path, DbConfig()), factory)
+
+        out = capsys.readouterr().out
+        assert "No usable manual providers left, stopping." in out
+        assert out.count("Unable to download manual") == 1
+        assert out.count("Processing") == 1
+
+    def test_database_is_still_written_after_an_early_exit(self, tmp_path: Path) -> None:
+        class Dead(ManualProvider):
+            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+                raise ProviderUnavailable("login failed")
+
+        db = ManualDb.load(tmp_path, DbConfig())
+        db.add_manual(LegoSet("999", "Earlier", "2000"))
+        process_owned_sets(SETS, tmp_path, db, ProviderFactory([], [Dead()]))
+        assert (tmp_path / "_lmd_db.json").exists()
+
+    def test_already_recorded_sets_do_not_block_the_exit(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The check sits at the top of the loop, so a run of skipped sets exits at once."""
+        factory = ProviderFactory([], [])
+        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), factory)
+        out = capsys.readouterr().out
+        assert "No usable manual providers left, stopping." in out
+        assert "Processing" not in out

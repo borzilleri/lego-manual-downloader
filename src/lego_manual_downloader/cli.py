@@ -16,6 +16,9 @@ def process_owned_sets(
         print("No owned sets found.")
         return
     for lego_set in sets:
+        if not providers.has_manual_providers:
+            print("No usable manual providers left, stopping.")
+            break
         description = f"{lego_set.number} - {lego_set.name} ({lego_set.year})"
         print(f"Processing {description}")
         if db.has_manual(lego_set.number):

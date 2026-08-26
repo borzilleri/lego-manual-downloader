@@ -1,5 +1,4 @@
 import io
-from functools import cached_property
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
@@ -10,7 +9,7 @@ from PIL import Image
 from lego_manual_downloader.config import Config, PeeronConfig
 from lego_manual_downloader.http import new_session
 from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.providers import ManualProvider
+from lego_manual_downloader.providers import AuthenticatedProvider, ManualProvider
 
 _AUTH_COOKIE = "PeeronSID"
 
@@ -19,20 +18,17 @@ class PeeronLoginError(Exception):
     pass
 
 
-class Peeron(ManualProvider):
+class Peeron(AuthenticatedProvider, ManualProvider):
+    label = "peeron"
+
     def __init__(self, config: Config) -> None:
         if config.peeron is None:
             raise ValueError("Peeron provider requires 'peeron' section in config")
+        if not config.peeron.username or not config.peeron.password:
+            raise ValueError("Peeron provider requires 'username' and 'password' in config")
         self.config: PeeronConfig = config.peeron
 
-    @cached_property
-    def session(self) -> requests.Session:
-        """Return a requests.Session object with the Peeron auth cookie set."""
-        if not self.config.username or not self.config.password:
-            raise ValueError("Peeron provider requires 'username' and 'password' in config")
-        return self.login(self.config.login_url, self.config.username, self.config.password)
-
-    def login(self, login_url: str, username: str, password: str) -> requests.Session:
+    def login(self) -> requests.Session:
         """Login to peeron.com and return a session with the auth cookie.
 
         The CGI login form carries no CSRF or state fields, so the credentials are
@@ -40,12 +36,13 @@ class Peeron(ManualProvider):
         """
         session = new_session()
 
+        login_url = self.config.login_url
         url_parts = urlsplit(login_url)
         response = session.post(
             login_url,
             data={
-                "user": username,
-                "pass": password,
+                "user": self.config.username,
+                "pass": self.config.password,
                 "openid_url": "",
                 "login": "Login",
             },
