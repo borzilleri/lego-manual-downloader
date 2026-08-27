@@ -178,13 +178,13 @@ class TestOwnedSets:
     def test_parses_the_export_csv(self, brickset: Brickset) -> None:
         brickset._login_result = FakeSession({OWNED_URL: FakeResponse(text=OWNED_SETS_CSV)})  # type: ignore[assignment]
         assert brickset.get_owned_sets() == [
-            LegoSet("10179", "Millennium Falcon", "2007"),
-            LegoSet("6080", "King's Castle", "1984"),
+            LegoSet("10179", "1", "Millennium Falcon", "2007"),
+            LegoSet("6080", "1", "King's Castle", "1984"),
         ]
 
     def test_empty_csv_yields_no_sets(self, brickset: Brickset) -> None:
         brickset._login_result = FakeSession(
-            {OWNED_URL: FakeResponse(text="Number,Set name,Year\n")}
+            {OWNED_URL: FakeResponse(text="Number,Variant,SetName,YearFrom\n")}
         )  # type: ignore[assignment]
         assert brickset.get_owned_sets() == []
 
@@ -194,7 +194,7 @@ class TestInstructions:
         brickset._login_result = FakeSession(
             {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
         )  # type: ignore[assignment]
-        assert brickset.instructions == {"10179": "https://lego.example/10179.pdf"}
+        assert brickset.instructions == {"10179-1": "https://lego.example/10179.pdf"}
 
     def test_is_fetched_only_once(self, brickset: Brickset) -> None:
         session = FakeSession({INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)})
@@ -214,7 +214,7 @@ class TestDownloadManual:
             }
         )
         output = tmp_path / "out.pdf"
-        assert brickset.download_manual(LegoSet("10179", "Falcon", "2007"), output)
+        assert brickset.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
         assert output.read_bytes() == b"%PDF-1.4 payload"
 
     def test_dropped_connection_leaves_no_partial_file(
@@ -229,7 +229,7 @@ class TestDownloadManual:
         )
         output = tmp_path / "out.pdf"
         with pytest.raises(requests.ConnectionError):
-            brickset.download_manual(LegoSet("10179", "Falcon", "2007"), output)
+            brickset.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
 
         assert not list(tmp_path.iterdir())
 
@@ -240,14 +240,49 @@ class TestDownloadManual:
             {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
         )  # type: ignore[assignment]
         output = tmp_path / "out.pdf"
-        assert not brickset.download_manual(LegoSet("0000", "Nope", "1999"), output)
+        assert not brickset.download_manual(LegoSet("0000", "1", "Nope", "1999"), output)
         assert not output.exists()
 
     def test_set_with_blank_url_returns_false(self, brickset: Brickset, tmp_path: Path) -> None:
         brickset._login_result = FakeSession(
             {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
         )  # type: ignore[assignment]
-        assert not brickset.download_manual(LegoSet("6080", "Castle", "1984"), tmp_path / "o.pdf")
+        assert not brickset.download_manual(
+            LegoSet("6080", "1", "Castle", "1984"), tmp_path / "o.pdf"
+        )
+
+
+class TestDownloadManualDryRun:
+    def test_reports_the_manual_without_fetching_or_writing(
+        self, brickset: Brickset, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        session = FakeSession({INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)})
+        brickset._login_result = session  # type: ignore[assignment]
+        output = tmp_path / "out.pdf"
+
+        assert brickset.download_manual(
+            LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=True
+        )
+        assert not output.exists()
+        assert session.requested == [INSTRUCTIONS_URL]
+        assert "brickset: dry run: would download manual for 10179-1" in capsys.readouterr().out
+
+    def test_unknown_set_still_returns_false(self, brickset: Brickset, tmp_path: Path) -> None:
+        brickset._login_result = FakeSession(  # type: ignore[assignment]
+            {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
+        )
+        assert not brickset.download_manual(
+            LegoSet("0000", "1", "Nope", "1999"), tmp_path / "out.pdf", dry_run=True
+        )
+
+    def test_variant_is_part_of_the_lookup(self, brickset: Brickset, tmp_path: Path) -> None:
+        """The instructions CSV is keyed 10179-1, so 10179-2 is a different set."""
+        brickset._login_result = FakeSession(  # type: ignore[assignment]
+            {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
+        )
+        assert not brickset.download_manual(
+            LegoSet("10179", "2", "Falcon", "2007"), tmp_path / "out.pdf", dry_run=True
+        )
 
 
 class TestLoginIsAttemptedOnce:
@@ -305,5 +340,5 @@ class TestLoginIsAttemptedOnce:
         calls = self.counting_login(brickset, requests.ConnectionError("offline"))
         for n in range(5):
             with pytest.raises(ProviderUnavailable):
-                brickset.download_manual(LegoSet(str(n), "Set", "2001"), tmp_path / "x.pdf")
+                brickset.download_manual(LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf")
         assert len(calls) == 1

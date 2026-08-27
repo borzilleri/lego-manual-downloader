@@ -86,16 +86,18 @@ class ProviderFactory:
                 print(f"Error fetching owned sets from {type(provider).__name__}: {e}")
         return []
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         for provider in list(self.manual_providers):
             try:
-                if provider.download_manual(lego_set, output_path):
+                if provider.download_manual(lego_set, output_path, dry_run=dry_run):
                     return True
             except ProviderUnavailable as e:
                 self._retire(provider, e)
             except Exception as e:
                 name = type(provider).__name__
-                print(f"Error downloading manual for {lego_set.number} from {name}: {e}")
+                print(f"Error downloading manual for {lego_set.set_number} from {name}: {e}")
         return False
 
     @staticmethod

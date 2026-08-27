@@ -178,7 +178,7 @@ class TestDownloadManual:
     ) -> None:
         peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
         output = tmp_path / "manual.pdf"
-        assert not peeron.download_manual(LegoSet("10179", "Falcon", "2007"), output)
+        assert not peeron.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
         assert not output.exists()
         assert "no images found" in capsys.readouterr().out
 
@@ -192,8 +192,31 @@ class TestDownloadManual:
             }
         )
         output = tmp_path / "manual.pdf"
-        assert peeron.download_manual(LegoSet("10179", "Falcon", "2007"), output)
+        assert peeron.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
         assert output.read_bytes().startswith(b"%PDF")
+
+
+class TestDownloadManualDryRun:
+    def test_reports_the_manual_without_fetching_scans_or_writing(
+        self, peeron: Peeron, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        thumb = f"{PEERON_THUMBS}/10179/1.png"
+        session = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page(thumb))})
+        peeron._login_result = session  # type: ignore[assignment]
+        output = tmp_path / "manual.pdf"
+
+        assert peeron.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=True)
+        assert not output.exists()
+        assert session.requested == [SET_PAGE_URL]
+        assert "peeron: dry run: would download manual for 10179-1" in capsys.readouterr().out
+
+    def test_returns_false_when_no_scans(self, peeron: Peeron, tmp_path: Path) -> None:
+        peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
+        output = tmp_path / "manual.pdf"
+        assert not peeron.download_manual(
+            LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=True
+        )
+        assert not output.exists()
 
 
 class TestLoginIsAttemptedOnce:
@@ -250,5 +273,5 @@ class TestLoginIsAttemptedOnce:
         calls = self.counting_login(peeron, requests.ConnectionError("offline"))
         for n in range(5):
             with pytest.raises(ProviderUnavailable):
-                peeron.download_manual(LegoSet(str(n), "Set", "2001"), tmp_path / "x.pdf")
+                peeron.download_manual(LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf")
         assert len(calls) == 1

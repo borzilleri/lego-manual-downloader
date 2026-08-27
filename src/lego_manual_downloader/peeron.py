@@ -87,11 +87,16 @@ class Peeron(AuthenticatedProvider, ManualProvider):
                 title=output_path.stem,
             )
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         """Download the instruction manual for a given set number to the specified output path."""
         page_scan_urls = self.get_page_scan_urls(lego_set.number)
         if not page_scan_urls:
-            print(f"peeron: no images found for {lego_set.number}")
+            print(f"{self.label}: no images found for {lego_set.set_number}")
             return False
+        if dry_run:
+            print(f"{self.label}: dry run: would download manual for {lego_set.set_number}")
+            return True
         self.download_pdf(page_scan_urls, output_path)
         return True
