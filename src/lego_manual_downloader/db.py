@@ -6,12 +6,13 @@ from lego_manual_downloader.lego import LegoSet
 
 
 class ManualDb:
-    def __init__(self, db_file: Path, db: dict[str, dict[str, str]]) -> None:
+    def __init__(self, manual_path: Path, db_file: Path, db: dict[str, dict[str, str]]) -> None:
+        self.manual_path = manual_path
         self.db_file = db_file
         self.db = db
 
     def has_manual(self, set_number: str) -> bool:
-        return set_number in self.db
+        return set_number in self.db and (self.manual_path / self.db[set_number]["file"]).exists()
 
     def add_manual(self, lego_set: LegoSet) -> None:
         self.db[lego_set.number] = {
@@ -28,4 +29,4 @@ class ManualDb:
     def load(output_path: Path, config: DbConfig) -> "ManualDb":
         db_path = output_path / config.file
         db = json.loads(db_path.read_text()) if db_path.exists() else {}
-        return ManualDb(db_path, db)
+        return ManualDb(output_path, db_path, db)

@@ -9,7 +9,7 @@ from lego_manual_downloader.provider_factory import ProviderFactory
 
 
 def process_owned_sets(
-    sets: list[LegoSet], download_path: Path, db: ManualDb, providers: ProviderFactory
+    sets: list[LegoSet], download_path: Path, db: ManualDb, providers: ProviderFactory, dry_run: bool = False
 ) -> None:
     """Download a manual for each owned set that is not already in the database."""
     if not sets:
@@ -22,8 +22,9 @@ def process_owned_sets(
         description = f"{lego_set.number} - {lego_set.name} ({lego_set.year})"
         print(f"Processing {description}")
         if db.has_manual(lego_set.number):
+            print(f"Manual for {description} already downloaded, skipping.")
             continue
-        if providers.download_manual(lego_set, download_path / lego_set.file_name):
+        elif providers.download_manual(lego_set, download_path / lego_set.file_name, dry_run=dry_run):
             db.add_manual(lego_set)
         else:
             print(f"Unable to download manual for {description}")
@@ -35,6 +36,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("download_dir", help="Path to directory to write manuals to.", type=Path)
     parser.add_argument(
         "--config", help="Path to config file.", default=None, required=False, type=Path
+    )
+    parser.add_argument(
+        "--dry-run", help="Run without downloading manuals.", action="store_true"
     )
     return parser
 
@@ -70,5 +74,5 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error loading database: {e}")
         return 1
 
-    process_owned_sets(providers.get_owned_sets(), args.download_dir, db, providers)
+    process_owned_sets(providers.get_owned_sets(), args.download_dir, db, providers, dry_run=args.dry_run)
     return 0

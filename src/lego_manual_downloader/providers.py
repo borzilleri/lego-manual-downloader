@@ -19,7 +19,7 @@ class ProviderUnavailable(Exception):
 
 class ManualProvider(ABC):
     @abstractmethod
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool = False) -> bool:
         """Download the manual for lego_set to output_path, returning whether it was found.
 
         Implementations must write via files.atomic_write so a failed or interrupted
