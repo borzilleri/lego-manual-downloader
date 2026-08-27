@@ -20,9 +20,9 @@ from lego_manual_downloader.providers import (
 )
 
 SETS = [
-    LegoSet("10179", "Millennium Falcon", "2007"),
-    LegoSet("6080", "King's Castle", "1984"),
-    LegoSet("9999", "Unavailable", "2020"),
+    LegoSet("10179", "1", "Millennium Falcon", "2007"),
+    LegoSet("6080", "1", "King's Castle", "1984"),
+    LegoSet("9999", "1", "Unavailable", "2020"),
 ]
 
 
@@ -35,9 +35,13 @@ class StubProvider(OwnedSetsProvider, ManualProvider):
     def get_owned_sets(self) -> list[LegoSet]:
         return self.sets
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         if lego_set.number == "9999":
             return False
+        if dry_run:
+            return True
         output_path.write_bytes(b"%PDF-1.4 stub")
         return True
 
@@ -57,6 +61,12 @@ class TestArgParser:
     def test_config_flag_is_a_path(self) -> None:
         args = build_arg_parser().parse_args(["/some/dir", "--config", "/etc/lmd.toml"])
         assert args.config == Path("/etc/lmd.toml")
+
+    def test_dry_run_defaults_to_false(self) -> None:
+        assert build_arg_parser().parse_args(["/some/dir"]).dry_run is False
+
+    def test_dry_run_flag_is_a_switch(self) -> None:
+        assert build_arg_parser().parse_args(["/some/dir", "--dry-run"]).dry_run is True
 
     def test_download_dir_is_required(self) -> None:
         with pytest.raises(SystemExit):
@@ -98,8 +108,8 @@ class TestProcessOwnedSets:
         db = ManualDb.load(tmp_path, DbConfig())
         process_owned_sets(SETS, tmp_path, db, stub_factory)
 
-        assert (tmp_path / "10179 Millennium Falcon (2007).pdf").exists()
-        assert sorted(db.db) == ["10179", "6080"]
+        assert (tmp_path / "10179-1 Millennium Falcon (2007).pdf").exists()
+        assert sorted(db.db) == ["10179-1", "6080-1"]
 
     def test_failed_download_is_not_recorded(
         self, tmp_path: Path, stub_factory: ProviderFactory
@@ -120,16 +130,28 @@ class TestProcessOwnedSets:
         db = ManualDb.load(tmp_path, DbConfig())
         db.add_manual(SETS[0])
         db.write_db()
+        (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 stub")
 
         second = ManualDb.load(tmp_path, DbConfig())
         process_owned_sets(SETS, tmp_path, second, stub_factory)
-        assert not (tmp_path / "10179 Millennium Falcon (2007).pdf").exists()
-        assert (tmp_path / "6080 King's Castle (1984).pdf").exists()
+        assert (tmp_path / "10179-1 Millennium Falcon (2007).pdf").read_bytes() == b"%PDF-1.4 stub"
+        assert (tmp_path / "6080-1 King's Castle (1984).pdf").exists()
+
+    def test_recorded_set_is_downloaded_again_when_its_file_is_gone(
+        self, tmp_path: Path, stub_factory: ProviderFactory
+    ) -> None:
+        """The DB records intent; the file on disk is the source of truth."""
+        db = ManualDb.load(tmp_path, DbConfig())
+        db.add_manual(SETS[0])
+        db.write_db()
+
+        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
+        assert (tmp_path / "10179-1 Millennium Falcon (2007).pdf").exists()
 
     def test_writes_the_database(self, tmp_path: Path, stub_factory: ProviderFactory) -> None:
         process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
         written = json.loads((tmp_path / "_lmd_db.json").read_text())
-        assert sorted(written) == ["10179", "6080"]
+        assert sorted(written) == ["10179-1", "6080-1"]
 
     def test_empty_set_list_reports_and_writes_nothing(
         self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
@@ -137,6 +159,68 @@ class TestProcessOwnedSets:
         process_owned_sets([], tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
         assert "No owned sets found." in capsys.readouterr().out
         assert not (tmp_path / "_lmd_db.json").exists()
+
+
+class TestDryRun:
+    def test_nothing_is_written_to_disk(
+        self, tmp_path: Path, stub_factory: ProviderFactory
+    ) -> None:
+        db = ManualDb.load(tmp_path, DbConfig())
+        process_owned_sets(SETS, tmp_path, db, stub_factory, dry_run=True)
+
+        assert list(tmp_path.iterdir()) == []
+        assert db.db == {}
+
+    def test_the_database_file_is_not_created(
+        self, tmp_path: Path, stub_factory: ProviderFactory
+    ) -> None:
+        process_owned_sets(
+            SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory, dry_run=True
+        )
+        assert not (tmp_path / "_lmd_db.json").exists()
+
+    def test_an_existing_database_is_left_untouched(
+        self, tmp_path: Path, stub_factory: ProviderFactory
+    ) -> None:
+        first = ManualDb.load(tmp_path, DbConfig())
+        first.add_manual(SETS[0])
+        first.write_db()
+        before = (tmp_path / "_lmd_db.json").read_text()
+
+        process_owned_sets(
+            SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory, dry_run=True
+        )
+        assert (tmp_path / "_lmd_db.json").read_text() == before
+
+    def test_unavailable_sets_are_still_reported(
+        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        process_owned_sets(
+            SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory, dry_run=True
+        )
+        assert "Unable to download manual for 9999" in capsys.readouterr().out
+
+    def test_already_downloaded_sets_are_still_skipped(
+        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A dry run should report only the work a real run would do."""
+        db = ManualDb.load(tmp_path, DbConfig())
+        db.add_manual(SETS[0])
+        (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 stub")
+
+        process_owned_sets(SETS, tmp_path, db, stub_factory, dry_run=True)
+        assert "already downloaded, skipping" in capsys.readouterr().out
+
+    def test_main_exits_zero_and_writes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_factory: ProviderFactory
+    ) -> None:
+        monkeypatch.setattr(ProviderFactory, "create", staticmethod(lambda config: stub_factory))
+        config = tmp_path / "config.toml"
+        config.write_text('[brickset]\nusername = "u"\npassword = "p"\n')
+
+        assert main([str(tmp_path), "--config", str(config), "--dry-run"]) == 0
+        assert not (tmp_path / "_lmd_db.json").exists()
+        assert list(tmp_path.iterdir()) == [config]
 
 
 class TestMain:
@@ -200,10 +284,12 @@ class TestStopsWhenProvidersExhausted:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         class Dead(ManualProvider):
-            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+            def download_manual(
+                self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+            ) -> bool:
                 raise ProviderUnavailable("login failed")
 
-        many = [LegoSet(str(n), f"Set {n}", "2001") for n in range(20)]
+        many = [LegoSet(str(n), "1", f"Set {n}", "2001") for n in range(20)]
         factory = ProviderFactory([], [Dead()])
         process_owned_sets(many, tmp_path, ManualDb.load(tmp_path, DbConfig()), factory)
 
@@ -214,11 +300,13 @@ class TestStopsWhenProvidersExhausted:
 
     def test_database_is_still_written_after_an_early_exit(self, tmp_path: Path) -> None:
         class Dead(ManualProvider):
-            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+            def download_manual(
+                self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+            ) -> bool:
                 raise ProviderUnavailable("login failed")
 
         db = ManualDb.load(tmp_path, DbConfig())
-        db.add_manual(LegoSet("999", "Earlier", "2000"))
+        db.add_manual(LegoSet("999", "1", "Earlier", "2000"))
         process_owned_sets(SETS, tmp_path, db, ProviderFactory([], [Dead()]))
         assert (tmp_path / "_lmd_db.json").exists()
 

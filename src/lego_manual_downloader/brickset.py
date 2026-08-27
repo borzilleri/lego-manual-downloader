@@ -122,12 +122,14 @@ class Brickset(AuthenticatedProvider, OwnedSetsProvider, ManualProvider):
             for line in csv.DictReader(response.text.splitlines())
         ]
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool = False) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         url = self.instructions.get(lego_set.set_number)
         if not url:
             return False
         if dry_run:
-            print(f"brickset: dry run: would download manual for {lego_set.number}")
+            print(f"{self.label}: dry run: would download manual for {lego_set.set_number}")
             return True
         with self.session.get(url, stream=True) as r:
             r.raise_for_status()

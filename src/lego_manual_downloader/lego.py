@@ -16,4 +16,4 @@ class LegoSet:
 
     @property
     def file_name(self) -> str:
-        return pathvalidate.sanitize_filename(f"{self.number}-{self.variant} {self.name} ({self.year}).pdf")
+        return pathvalidate.sanitize_filename(f"{self.set_number} {self.name} ({self.year}).pdf")

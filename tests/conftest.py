@@ -44,19 +44,19 @@ def full_config(brickset_config: BricksetConfig, peeron_config: PeeronConfig) ->
 @pytest.fixture
 def lego_sets() -> list[LegoSet]:
     return [
-        LegoSet("10179", "Millennium Falcon", "2007"),
-        LegoSet("6080", "King's Castle", "1984"),
+        LegoSet("10179", "1", "Millennium Falcon", "2007"),
+        LegoSet("6080", "1", "King's Castle", "1984"),
     ]
 
 
-OWNED_SETS_CSV = """Number,Set name,Year
-10179,Millennium Falcon,2007
-6080,King's Castle,1984
+OWNED_SETS_CSV = """Number,Variant,SetName,YearFrom
+10179,1,Millennium Falcon,2007
+6080,1,King's Castle,1984
 """
 
 INSTRUCTIONS_CSV = """SetNumber,URL
-10179,https://lego.example/10179.pdf
-6080,
+10179-1,https://lego.example/10179.pdf
+6080-1,
 """
 
 LOGIN_FORM_HTML = """

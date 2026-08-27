@@ -9,7 +9,11 @@ from lego_manual_downloader.provider_factory import ProviderFactory
 
 
 def process_owned_sets(
-    sets: list[LegoSet], download_path: Path, db: ManualDb, providers: ProviderFactory, dry_run: bool = False
+    sets: list[LegoSet],
+    download_path: Path,
+    db: ManualDb,
+    providers: ProviderFactory,
+    dry_run: bool = False,
 ) -> None:
     """Download a manual for each owned set that is not already in the database."""
     if not sets:
@@ -19,16 +23,19 @@ def process_owned_sets(
         if not providers.has_manual_providers:
             print("No usable manual providers left, stopping.")
             break
-        description = f"{lego_set.number} - {lego_set.name} ({lego_set.year})"
+        description = f"{lego_set.set_number} - {lego_set.name} ({lego_set.year})"
         print(f"Processing {description}")
-        if db.has_manual(lego_set.number):
+        if db.has_manual(lego_set.set_number):
             print(f"Manual for {description} already downloaded, skipping.")
             continue
-        elif providers.download_manual(lego_set, download_path / lego_set.file_name, dry_run=dry_run):
-            db.add_manual(lego_set)
+        output_path = download_path / lego_set.file_name
+        if providers.download_manual(lego_set, output_path, dry_run=dry_run):
+            if not dry_run:
+                db.add_manual(lego_set)
         else:
             print(f"Unable to download manual for {description}")
-    db.write_db()
+    if not dry_run:
+        db.write_db()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -38,7 +45,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--config", help="Path to config file.", default=None, required=False, type=Path
     )
     parser.add_argument(
-        "--dry-run", help="Run without downloading manuals.", action="store_true"
+        "--dry-run",
+        help="Report what would be downloaded without writing manuals or the database.",
+        action="store_true",
     )
     return parser
 
@@ -74,5 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error loading database: {e}")
         return 1
 
-    process_owned_sets(providers.get_owned_sets(), args.download_dir, db, providers, dry_run=args.dry_run)
+    process_owned_sets(
+        providers.get_owned_sets(), args.download_dir, db, providers, dry_run=args.dry_run
+    )
     return 0

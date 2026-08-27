@@ -21,13 +21,17 @@ class FakeBoth(OwnedSetsProvider, ManualProvider):
     def __init__(self, config: Config) -> None:
         self.config = config
         self.downloads: list[str] = []
+        self.dry_runs: list[bool] = []
         FakeBoth.instances_created += 1
 
     def get_owned_sets(self) -> list[LegoSet]:
-        return [LegoSet("1", "One", "2001")]
+        return [LegoSet("1", "1", "One", "2001")]
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         self.downloads.append(lego_set.number)
+        self.dry_runs.append(dry_run)
         return True
 
 
@@ -35,7 +39,9 @@ class FakeManualOnly(ManualProvider):
     def __init__(self, config: Config) -> None:
         self.config = config
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         return False
 
 
@@ -43,7 +49,9 @@ class FakeUnconfigurable(ManualProvider):
     def __init__(self, config: Config) -> None:
         raise ValueError("needs a 'fake' section in config")
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         return True
 
 
@@ -115,7 +123,7 @@ class TestGetOwnedSets:
             def get_owned_sets(self) -> list[LegoSet]:
                 return []
 
-        expected = [LegoSet("1", "One", "2001")]
+        expected = [LegoSet("1", "1", "One", "2001")]
         factory = ProviderFactory([Empty(), FakeBoth(Config())], [])
         assert factory.get_owned_sets() == expected
 
@@ -125,7 +133,7 @@ class TestGetOwnedSets:
                 raise RuntimeError("network down")
 
         factory = ProviderFactory([Boom(), FakeBoth(Config())], [])
-        assert factory.get_owned_sets() == [LegoSet("1", "One", "2001")]
+        assert factory.get_owned_sets() == [LegoSet("1", "1", "One", "2001")]
         assert "network down" in capsys.readouterr().out
 
     def test_returns_empty_when_every_provider_fails(self) -> None:
@@ -144,42 +152,69 @@ class TestDownloadManual:
         winner = FakeBoth(Config())
         loser = FakeBoth(Config())
         factory = ProviderFactory([], [winner, loser])
-        assert factory.download_manual(LegoSet("1", "One", "2001"), tmp_path / "x.pdf")
+        assert factory.download_manual(LegoSet("1", "1", "One", "2001"), tmp_path / "x.pdf")
         assert winner.downloads == ["1"]
         assert loser.downloads == []
 
     def test_falls_through_a_provider_returning_false(self, tmp_path: Path) -> None:
         succeeding = FakeBoth(Config())
         factory = ProviderFactory([], [FakeManualOnly(Config()), succeeding])
-        assert factory.download_manual(LegoSet("1", "One", "2001"), tmp_path / "x.pdf")
+        assert factory.download_manual(LegoSet("1", "1", "One", "2001"), tmp_path / "x.pdf")
         assert succeeding.downloads == ["1"]
 
     def test_falls_through_a_raising_provider(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         class Boom(ManualProvider):
-            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+            def download_manual(
+                self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+            ) -> bool:
                 raise RuntimeError("timeout")
 
         factory = ProviderFactory([], [Boom(), FakeBoth(Config())])
-        assert factory.download_manual(LegoSet("1", "One", "2001"), tmp_path / "x.pdf")
+        assert factory.download_manual(LegoSet("1", "1", "One", "2001"), tmp_path / "x.pdf")
         assert "timeout" in capsys.readouterr().out
 
     def test_error_message_names_the_provider_class(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         class Boom(ManualProvider):
-            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+            def download_manual(
+                self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+            ) -> bool:
                 raise RuntimeError("timeout")
 
-        ProviderFactory([], [Boom()]).download_manual(LegoSet("1", "a", "b"), tmp_path / "x")
+        ProviderFactory([], [Boom()]).download_manual(LegoSet("1", "1", "a", "b"), tmp_path / "x")
         output = capsys.readouterr().out
         assert "Boom" in output
         assert "object at 0x" not in output
 
     def test_returns_false_when_nothing_succeeds(self, tmp_path: Path) -> None:
         factory = ProviderFactory([], [FakeManualOnly(Config())])
-        assert not factory.download_manual(LegoSet("1", "One", "2001"), tmp_path / "x.pdf")
+        assert not factory.download_manual(LegoSet("1", "1", "One", "2001"), tmp_path / "x.pdf")
+
+    def test_dry_run_defaults_to_off(self, tmp_path: Path) -> None:
+        provider = FakeBoth(Config())
+        ProviderFactory([], [provider]).download_manual(
+            LegoSet("1", "1", "One", "2001"), tmp_path / "x.pdf"
+        )
+        assert provider.dry_runs == [False]
+
+    def test_dry_run_reaches_the_provider(self, tmp_path: Path) -> None:
+        provider = FakeBoth(Config())
+        ProviderFactory([], [provider]).download_manual(
+            LegoSet("1", "1", "One", "2001"), tmp_path / "x.pdf", dry_run=True
+        )
+        assert provider.dry_runs == [True]
+
+    def test_dry_run_still_stops_at_the_first_success(self, tmp_path: Path) -> None:
+        winner, loser = FakeBoth(Config()), FakeBoth(Config())
+        factory = ProviderFactory([], [winner, loser])
+        assert factory.download_manual(
+            LegoSet("1", "1", "One", "2001"), tmp_path / "x.pdf", dry_run=True
+        )
+        assert winner.dry_runs == [True]
+        assert loser.dry_runs == []
 
 
 def test_real_registry_maps_the_shipped_providers() -> None:
@@ -224,7 +259,9 @@ class Unavailable(OwnedSetsProvider, ManualProvider):
         self.sets_calls += 1
         raise ProviderUnavailable("brickset login failed")
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         self.manual_calls += 1
         raise ProviderUnavailable("brickset login failed")
 
@@ -235,7 +272,9 @@ class Transient(ManualProvider):
     def __init__(self) -> None:
         self.calls = 0
 
-    def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+    def download_manual(
+        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+    ) -> bool:
         self.calls += 1
         raise RuntimeError("404 for this set")
 
@@ -245,7 +284,9 @@ class TestRetiresUnavailableProviders:
         dead = Unavailable()
         factory = ProviderFactory([], [dead])
         for n in range(5):
-            assert not factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+            assert not factory.download_manual(
+                LegoSet(str(n), "1", "S", "2001"), tmp_path / "x.pdf"
+            )
         assert dead.manual_calls == 1
 
     def test_unavailable_provider_is_reported_once(
@@ -253,20 +294,22 @@ class TestRetiresUnavailableProviders:
     ) -> None:
         factory = ProviderFactory([], [Unavailable()])
         for n in range(5):
-            factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+            factory.download_manual(LegoSet(str(n), "1", "S", "2001"), tmp_path / "x.pdf")
         assert capsys.readouterr().out.count("Dropping Unavailable for this run") == 1
 
     def test_transient_failures_do_not_retire_the_provider(self, tmp_path: Path) -> None:
         flaky = Transient()
         factory = ProviderFactory([], [flaky])
         for n in range(5):
-            assert not factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+            assert not factory.download_manual(
+                LegoSet(str(n), "1", "S", "2001"), tmp_path / "x.pdf"
+            )
         assert flaky.calls == 5
 
     def test_retired_provider_is_removed_from_both_roles(self, tmp_path: Path) -> None:
         dead = Unavailable()
         factory = ProviderFactory([dead], [dead])
-        factory.download_manual(LegoSet("1", "S", "2001"), tmp_path / "x.pdf")
+        factory.download_manual(LegoSet("1", "1", "S", "2001"), tmp_path / "x.pdf")
         assert factory.manual_providers == []
         assert factory.sets_providers == []
 
@@ -275,14 +318,14 @@ class TestRetiresUnavailableProviders:
         healthy = FakeBoth(Config())
         factory = ProviderFactory([], [dead, healthy])
         for n in range(3):
-            assert factory.download_manual(LegoSet(str(n), "S", "2001"), tmp_path / "x.pdf")
+            assert factory.download_manual(LegoSet(str(n), "1", "S", "2001"), tmp_path / "x.pdf")
         assert dead.manual_calls == 1
         assert healthy.downloads == ["0", "1", "2"]
 
     def test_unavailable_sets_provider_is_retired(self) -> None:
         dead = Unavailable()
         factory = ProviderFactory([dead, FakeBoth(Config())], [])
-        assert factory.get_owned_sets() == [LegoSet("1", "One", "2001")]
+        assert factory.get_owned_sets() == [LegoSet("1", "1", "One", "2001")]
         factory.get_owned_sets()
         assert dead.sets_calls == 1
 
@@ -297,7 +340,7 @@ class TestHasManualProviders:
     def test_flips_when_the_last_provider_retires(self, tmp_path: Path) -> None:
         factory = ProviderFactory([], [Unavailable()])
         assert factory.has_manual_providers
-        factory.download_manual(LegoSet("1", "S", "2001"), tmp_path / "x.pdf")
+        factory.download_manual(LegoSet("1", "1", "S", "2001"), tmp_path / "x.pdf")
         assert not factory.has_manual_providers
 
     def test_retiring_an_absent_provider_is_a_no_op(self, tmp_path: Path) -> None:
@@ -318,7 +361,9 @@ class TestHasManualProviders:
             def __hash__(self) -> int:
                 return 0
 
-            def download_manual(self, lego_set: LegoSet, output_path: Path) -> bool:
+            def download_manual(
+                self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
+            ) -> bool:
                 return False
 
         first, second = Equal(), Equal()

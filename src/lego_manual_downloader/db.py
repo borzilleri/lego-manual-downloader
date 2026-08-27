@@ -6,17 +6,21 @@ from lego_manual_downloader.lego import LegoSet
 
 
 class ManualDb:
-    def __init__(self, manual_path: Path, db_file: Path, db: dict[str, dict[str, str]]) -> None:
-        self.manual_path = manual_path
+    def __init__(self, download_path: Path, db_file: Path, db: dict[str, dict[str, str]]) -> None:
+        self.download_path = download_path
         self.db_file = db_file
         self.db = db
 
     def has_manual(self, set_number: str) -> bool:
-        return set_number in self.db and (self.manual_path / self.db[set_number]["file"]).exists()
+        entry = self.db.get(set_number)
+        if not entry or not entry.get("file"):
+            return False
+        return (self.download_path / entry["file"]).exists()
 
     def add_manual(self, lego_set: LegoSet) -> None:
-        self.db[lego_set.number] = {
+        self.db[lego_set.set_number] = {
             "number": lego_set.number,
+            "variant": lego_set.variant,
             "name": lego_set.name,
             "year": lego_set.year,
             "file": lego_set.file_name,
@@ -26,7 +30,7 @@ class ManualDb:
         self.db_file.write_text(json.dumps(self.db, indent=4))
 
     @staticmethod
-    def load(output_path: Path, config: DbConfig) -> "ManualDb":
-        db_path = output_path / config.file
+    def load(download_path: Path, config: DbConfig) -> "ManualDb":
+        db_path = download_path / config.file
         db = json.loads(db_path.read_text()) if db_path.exists() else {}
-        return ManualDb(output_path, db_path, db)
+        return ManualDb(download_path, db_path, db)
