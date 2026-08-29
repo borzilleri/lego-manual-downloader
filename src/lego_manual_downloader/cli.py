@@ -23,24 +23,28 @@ def process_owned_sets(
         if not providers.has_manual_providers:
             print("No usable manual providers left, stopping.")
             break
-        description = f"{lego_set.set_number} - {lego_set.name} ({lego_set.year})"
-        print(f"Processing {description}")
-        if db.has_manual(lego_set.set_number):
-            print(f"Manual for {description} already downloaded, skipping.")
+        print(f"Processing {lego_set}")
+        if db.has_manual(lego_set):
+            if db.needs_rename(lego_set):
+                db.rename(lego_set, dry_run=dry_run)
+            else:
+                print(f"Manual for {lego_set} already exists, skipping.")
             continue
         output_path = download_path / lego_set.file_name
         if providers.download_manual(lego_set, output_path, dry_run=dry_run):
             if not dry_run:
                 db.add_manual(lego_set)
         else:
-            print(f"Unable to download manual for {description}")
+            print(f"Unable to download manual for {lego_set}")
     if not dry_run:
         db.write_db()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("download_dir", help="Path to directory to write manuals to.", type=Path)
+    parser.add_argument(
+        "download_dir", help="Path to directory to write manuals to.", type=Path
+    )
     parser.add_argument(
         "--config", help="Path to config file.", default=None, required=False, type=Path
     )
@@ -84,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     process_owned_sets(
-        providers.get_owned_sets(), args.download_dir, db, providers, dry_run=args.dry_run
+        providers.get_owned_sets(),
+        args.download_dir,
+        db,
+        providers,
+        dry_run=args.dry_run,
     )
     return 0
