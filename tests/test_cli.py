@@ -24,6 +24,15 @@ SETS = [
     LegoSet("6080", "1", "King's Castle", "1984"),
     LegoSet("9999", "1", "Unavailable", "2020"),
 ]
+LEGACY_NAME = "10179 Falcon.pdf"
+
+
+def _db_with_manual_under_legacy_name(tmp_path: Path) -> ManualDb:
+    """SETS[0]'s manual is on disk, but under a name the set no longer derives."""
+    entry = {**SETS[0].to_dict(), "file": LEGACY_NAME}
+    (tmp_path / "_lmd_db.json").write_text(json.dumps({"10179-1": entry}))
+    (tmp_path / LEGACY_NAME).write_bytes(b"%PDF-1.4 original")
+    return ManualDb.load(tmp_path, DbConfig())
 
 
 class StubProvider(OwnedSetsProvider, ManualProvider):
@@ -148,6 +157,30 @@ class TestProcessOwnedSets:
         process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
         assert (tmp_path / "10179-1 Millennium Falcon (2007).pdf").exists()
 
+    def test_a_manual_already_on_disk_is_adopted_rather_than_redownloaded(
+        self, tmp_path: Path, stub_factory: ProviderFactory
+    ) -> None:
+        """An empty database next to a full download directory must not refetch everything."""
+        (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 original")
+
+        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
+
+        assert (tmp_path / SETS[0].file_name).read_bytes() == b"%PDF-1.4 original"
+        assert "10179-1" in json.loads((tmp_path / "_lmd_db.json").read_text())
+
+    def test_a_misnamed_manual_is_renamed_rather_than_redownloaded(
+        self, tmp_path: Path, stub_factory: ProviderFactory
+    ) -> None:
+        db = _db_with_manual_under_legacy_name(tmp_path)
+
+        process_owned_sets(SETS, tmp_path, db, stub_factory)
+
+        assert (tmp_path / SETS[0].file_name).read_bytes() == b"%PDF-1.4 original"
+        assert not (tmp_path / LEGACY_NAME).exists()
+
+        written = json.loads((tmp_path / "_lmd_db.json").read_text())
+        assert written["10179-1"]["file"] == SETS[0].file_name
+
     def test_writes_the_database(self, tmp_path: Path, stub_factory: ProviderFactory) -> None:
         process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
         written = json.loads((tmp_path / "_lmd_db.json").read_text())
@@ -209,7 +242,20 @@ class TestDryRun:
         (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 stub")
 
         process_owned_sets(SETS, tmp_path, db, stub_factory, dry_run=True)
-        assert "already downloaded, skipping" in capsys.readouterr().out
+        assert "already exists, skipping" in capsys.readouterr().out
+
+    def test_a_rename_is_reported_but_not_performed(
+        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = _db_with_manual_under_legacy_name(tmp_path)
+        before = (tmp_path / "_lmd_db.json").read_text()
+
+        process_owned_sets(SETS, tmp_path, db, stub_factory, dry_run=True)
+
+        assert f"Renaming manual for {SETS[0]} to {SETS[0].file_name}." in capsys.readouterr().out
+        assert (tmp_path / LEGACY_NAME).exists()
+        assert not (tmp_path / SETS[0].file_name).exists()
+        assert (tmp_path / "_lmd_db.json").read_text() == before
 
     def test_main_exits_zero_and_writes_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_factory: ProviderFactory
