@@ -42,9 +42,7 @@ def process_owned_sets(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "download_dir", help="Path to directory to write manuals to.", type=Path
-    )
+    parser.add_argument("download_dir", help="Path to directory to write manuals to.", type=Path)
     parser.add_argument(
         "--config", help="Path to config file.", default=None, required=False, type=Path
     )

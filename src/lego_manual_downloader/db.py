@@ -6,9 +6,7 @@ from lego_manual_downloader.lego import LegoSet
 
 
 class ManualDb:
-    def __init__(
-        self, download_path: Path, db_file: Path, db: dict[str, object]
-    ) -> None:
+    def __init__(self, download_path: Path, db_file: Path, db: dict[str, object]) -> None:
         self.download_path = download_path
         self.db_file = db_file
         self.db: dict[str, LegoSet] = {}
@@ -25,9 +23,7 @@ class ManualDb:
             return (self.download_path / entry.current_file_name).exists()
         if not (self.download_path / lego_set.file_name).exists():
             return False
-        print(
-            f"Warning: Manual for {lego_set} exists in download path but not in database."
-        )
+        print(f"Warning: Manual for {lego_set} exists in download path but not in database.")
         self.add_manual(lego_set)
         return True
 
