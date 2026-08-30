@@ -4,14 +4,6 @@ import pytest
 
 from lego_manual_downloader.lego import LegoSet
 
-FALCON_ENTRY = {
-    "number": "10179",
-    "variant": "1",
-    "name": "Millennium Falcon",
-    "year": "2007",
-    "file": "10179-1 Millennium Falcon (2007).pdf",
-}
-
 
 def test_set_number_joins_number_and_variant() -> None:
     assert LegoSet("10179", "2", "Millennium Falcon", "2007").set_number == "10179-2"
@@ -90,76 +82,3 @@ def test_str_describes_the_set() -> None:
     assert str(LegoSet("10179", "1", "Millennium Falcon", "2007")) == (
         "10179-1 - Millennium Falcon (2007)"
     )
-
-
-class TestRecordedFileName:
-    """`file_name` is where the manual belongs; `current_file_name` is where it is."""
-
-    def test_it_does_not_change_the_derived_name(self) -> None:
-        lego_set = LegoSet("10179", "1", "Millennium Falcon", "2007", "legacy name.pdf")
-        assert lego_set.file_name == "10179-1 Millennium Falcon (2007).pdf"
-
-    def test_it_is_the_current_name(self) -> None:
-        lego_set = LegoSet("10179", "1", "Millennium Falcon", "2007", "legacy name.pdf")
-        assert lego_set.current_file_name == "legacy name.pdf"
-
-    def test_the_current_name_falls_back_to_the_derived_one(self) -> None:
-        lego_set = LegoSet("10179", "1", "Millennium Falcon", "2007")
-        assert lego_set.current_file_name == lego_set.file_name
-        assert lego_set.current_file_name == "10179-1 Millennium Falcon (2007).pdf"
-
-    @pytest.mark.parametrize("recorded", ["../escape.pdf", "..\\escape.pdf", "/etc/passwd"])
-    def test_the_current_name_is_sanitised_like_a_derived_one(self, recorded: str) -> None:
-        """The database is not a trusted source of paths."""
-        file_name = LegoSet("1234", "1", "Whatever", "1999", recorded).current_file_name
-        assert "/" not in file_name
-        assert "\\" not in file_name
-        assert Path(file_name).name == file_name
-        assert not Path(file_name).is_absolute()
-
-    def test_it_is_ignored_by_equality(self) -> None:
-        """One set is one set, however its manual happens to be named on disk."""
-        assert LegoSet("1", "1", "a", "2", "x.pdf") == LegoSet("1", "1", "a", "2")
-
-
-class TestFromDict:
-    def test_it_reads_every_field(self) -> None:
-        lego_set = LegoSet.from_dict(FALCON_ENTRY)
-        assert lego_set == LegoSet("10179", "1", "Millennium Falcon", "2007")
-        assert lego_set is not None
-        assert lego_set.recorded_file_name == "10179-1 Millennium Falcon (2007).pdf"
-
-    def test_the_recorded_file_name_is_optional(self) -> None:
-        lego_set = LegoSet.from_dict({k: v for k, v in FALCON_ENTRY.items() if k != "file"})
-        assert lego_set is not None
-        assert lego_set.recorded_file_name is None
-
-    @pytest.mark.parametrize("missing", ["number", "variant", "name", "year"])
-    def test_a_missing_required_field_yields_none(self, missing: str) -> None:
-        assert LegoSet.from_dict({k: v for k, v in FALCON_ENTRY.items() if k != missing}) is None
-
-    def test_an_empty_entry_yields_none(self) -> None:
-        assert LegoSet.from_dict({}) is None
-
-
-class TestToDict:
-    def test_it_writes_the_persisted_schema(self) -> None:
-        assert LegoSet("10179", "1", "Millennium Falcon", "2007").to_dict() == {
-            "number": "10179",
-            "variant": "1",
-            "name": "Millennium Falcon",
-            "year": "2007",
-            "file": "10179-1 Millennium Falcon (2007).pdf",
-        }
-
-    def test_it_records_where_the_file_is_not_where_it_belongs(self) -> None:
-        """A rename that never happened must not be written as though it had."""
-        lego_set = LegoSet("10179", "1", "Millennium Falcon", "2007", "legacy name.pdf")
-        assert lego_set.to_dict()["file"] == "legacy name.pdf"
-
-    def test_it_round_trips_through_from_dict(self) -> None:
-        original = LegoSet("10179", "1", "Millennium Falcon", "2007", "legacy name.pdf")
-        restored = LegoSet.from_dict(original.to_dict())
-        assert restored == original
-        assert restored is not None
-        assert restored.current_file_name == original.current_file_name

@@ -68,9 +68,18 @@ def _bind(cls: type[T], data: dict[str, Any], where: str = "") -> T:
 
 
 @dataclass(frozen=True)
+class HttpConfig:
+    timeout: int = 10
+
+
+@dataclass(frozen=True)
 class ProvidersConfig:
     owned_sets_providers: tuple[str, ...] = ("brickset",)
     manual_providers: tuple[str, ...] = ("brickset", "peeron")
+
+    @property
+    def all_providers(self) -> list[str]:
+        return list(dict.fromkeys(self.owned_sets_providers + self.manual_providers).keys())
 
 
 @dataclass(frozen=True)
@@ -79,18 +88,22 @@ class DbConfig:
 
 
 @dataclass(frozen=True)
-class BricksetConfig:
+class CredentialedConfig:
+    """Shared by every provider section that logs in with a username and password."""
+
     username: str
     password: str
+
+
+@dataclass(frozen=True)
+class BricksetConfig(CredentialedConfig):
     base_url: str = "https://brickset.com"
     owned_sets_url: str = "/exportscripts/sets/owned/"
     instructions_url: str = "/exportscripts/instructions"
 
 
 @dataclass(frozen=True)
-class PeeronConfig:
-    username: str
-    password: str
+class PeeronConfig(CredentialedConfig):
     login_url: str = "http://peeron.com/cgi-bin/invcgis/login"
     scans_url: str = "http://peeron.com/scans/"
     thumbs_url: str = "http://belay.peeron.com/thumbs"
@@ -102,6 +115,7 @@ class Config:
     db: DbConfig = DbConfig()
     brickset: BricksetConfig | None = None
     peeron: PeeronConfig | None = None
+    http: HttpConfig = HttpConfig()
 
     @staticmethod
     def load(path: Path | None = None) -> "Config":

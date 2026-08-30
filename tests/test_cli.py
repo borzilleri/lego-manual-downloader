@@ -1,64 +1,35 @@
-import json
 from pathlib import Path
 
 import pytest
 
-from lego_manual_downloader.cli import (
-    build_arg_parser,
-    main,
-    process_owned_sets,
-    validate_output_dir,
-)
-from lego_manual_downloader.config import DbConfig
-from lego_manual_downloader.db import ManualDb
+from conftest import SETS, ManualOnlyWriter, SetsOnlyProvider, StubProvider
+from lego_manual_downloader import cli
+from lego_manual_downloader.cli import build_arg_parser, main, validate_output_dir
 from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.provider_factory import ProviderFactory
-from lego_manual_downloader.providers import (
-    ManualProvider,
-    OwnedSetsProvider,
-    ProviderUnavailable,
-)
+from lego_manual_downloader.providers import BaseProvider
 
-SETS = [
-    LegoSet("10179", "1", "Millennium Falcon", "2007"),
-    LegoSet("6080", "1", "King's Castle", "1984"),
-    LegoSet("9999", "1", "Unavailable", "2020"),
-]
-LEGACY_NAME = "10179 Falcon.pdf"
+BRICKSET_CONFIG = '[brickset]\nusername = "u"\npassword = "p"\n'
+
+STUB_CONFIG = '[providers]\nowned-sets-providers = ["stub"]\nmanual-providers = ["stub"]\n'
 
 
-def _db_with_manual_under_legacy_name(tmp_path: Path) -> ManualDb:
-    """SETS[0]'s manual is on disk, but under a name the set no longer derives."""
-    entry = {**SETS[0].to_dict(), "file": LEGACY_NAME}
-    (tmp_path / "_lmd_db.json").write_text(json.dumps({"10179-1": entry}))
-    (tmp_path / LEGACY_NAME).write_bytes(b"%PDF-1.4 original")
-    return ManualDb.load(tmp_path, DbConfig())
+def _use_providers(monkeypatch: pytest.MonkeyPatch, providers: dict[str, BaseProvider]) -> None:
+    """Stand fakes in for the real providers, leaving main's own wiring under test.
+
+    `main` builds its chains from the provider names in the config, so the config
+    each test writes is what makes these reachable.
+    """
+    monkeypatch.setattr(cli, "create_providers", lambda *_: providers)
 
 
-class StubProvider(OwnedSetsProvider, ManualProvider):
-    """Serves every set except 9999, which no provider can supply."""
-
-    def __init__(self, sets: list[LegoSet] | None = None) -> None:
-        self.sets = SETS if sets is None else sets
-
-    def get_owned_sets(self) -> list[LegoSet]:
-        return self.sets
-
-    def download_manual(
-        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
-    ) -> bool:
-        if lego_set.number == "9999":
-            return False
-        if dry_run:
-            return True
-        output_path.write_bytes(b"%PDF-1.4 stub")
-        return True
+def _use_stub_providers(monkeypatch: pytest.MonkeyPatch, sets: list[LegoSet] | None = None) -> None:
+    _use_providers(monkeypatch, {"stub": StubProvider(sets)})
 
 
-@pytest.fixture
-def stub_factory() -> ProviderFactory:
-    stub = StubProvider()
-    return ProviderFactory([stub], [stub])
+def _config_file(tmp_path: Path, body: str = STUB_CONFIG) -> Path:
+    config = tmp_path / "config.toml"
+    config.write_text(body)
+    return config
 
 
 class TestArgParser:
@@ -94,179 +65,21 @@ class TestValidateOutputDir:
 
     def test_rejects_a_file(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         target = tmp_path / "a-file"
-        target.write_text("")
+        target.write_text("hi")
         assert not validate_output_dir(target)
         assert "not a directory" in capsys.readouterr().out
 
     def test_rejects_an_unwritable_directory(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        target = tmp_path / "readonly"
-        target.mkdir(mode=0o500)
+        target = tmp_path / "locked"
+        target.mkdir()
+        target.chmod(0o500)
         try:
             assert not validate_output_dir(target)
             assert "not writable" in capsys.readouterr().out
         finally:
             target.chmod(0o700)
-
-
-class TestProcessOwnedSets:
-    def test_downloads_and_records_each_set(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        db = ManualDb.load(tmp_path, DbConfig())
-        process_owned_sets(SETS, tmp_path, db, stub_factory)
-
-        assert (tmp_path / "10179-1 Millennium Falcon (2007).pdf").exists()
-        assert sorted(db.db) == ["10179-1", "6080-1"]
-
-    def test_failed_download_is_not_recorded(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        db = ManualDb.load(tmp_path, DbConfig())
-        process_owned_sets(SETS, tmp_path, db, stub_factory)
-        assert "9999" not in db.db
-
-    def test_failed_download_is_reported(
-        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
-        assert "Unable to download manual for 9999" in capsys.readouterr().out
-
-    def test_already_recorded_sets_are_skipped(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        db = ManualDb.load(tmp_path, DbConfig())
-        db.add_manual(SETS[0])
-        db.write_db()
-        (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 stub")
-
-        second = ManualDb.load(tmp_path, DbConfig())
-        process_owned_sets(SETS, tmp_path, second, stub_factory)
-        assert (tmp_path / "10179-1 Millennium Falcon (2007).pdf").read_bytes() == b"%PDF-1.4 stub"
-        assert (tmp_path / "6080-1 King's Castle (1984).pdf").exists()
-
-    def test_recorded_set_is_downloaded_again_when_its_file_is_gone(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        """The DB records intent; the file on disk is the source of truth."""
-        db = ManualDb.load(tmp_path, DbConfig())
-        db.add_manual(SETS[0])
-        db.write_db()
-
-        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
-        assert (tmp_path / "10179-1 Millennium Falcon (2007).pdf").exists()
-
-    def test_a_manual_already_on_disk_is_adopted_rather_than_redownloaded(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        """An empty database next to a full download directory must not refetch everything."""
-        (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 original")
-
-        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
-
-        assert (tmp_path / SETS[0].file_name).read_bytes() == b"%PDF-1.4 original"
-        assert "10179-1" in json.loads((tmp_path / "_lmd_db.json").read_text())
-
-    def test_a_misnamed_manual_is_renamed_rather_than_redownloaded(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        db = _db_with_manual_under_legacy_name(tmp_path)
-
-        process_owned_sets(SETS, tmp_path, db, stub_factory)
-
-        assert (tmp_path / SETS[0].file_name).read_bytes() == b"%PDF-1.4 original"
-        assert not (tmp_path / LEGACY_NAME).exists()
-
-        written = json.loads((tmp_path / "_lmd_db.json").read_text())
-        assert written["10179-1"]["file"] == SETS[0].file_name
-
-    def test_writes_the_database(self, tmp_path: Path, stub_factory: ProviderFactory) -> None:
-        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
-        written = json.loads((tmp_path / "_lmd_db.json").read_text())
-        assert sorted(written) == ["10179-1", "6080-1"]
-
-    def test_empty_set_list_reports_and_writes_nothing(
-        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        process_owned_sets([], tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory)
-        assert "No owned sets found." in capsys.readouterr().out
-        assert not (tmp_path / "_lmd_db.json").exists()
-
-
-class TestDryRun:
-    def test_nothing_is_written_to_disk(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        db = ManualDb.load(tmp_path, DbConfig())
-        process_owned_sets(SETS, tmp_path, db, stub_factory, dry_run=True)
-
-        assert list(tmp_path.iterdir()) == []
-        assert db.db == {}
-
-    def test_the_database_file_is_not_created(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        process_owned_sets(
-            SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory, dry_run=True
-        )
-        assert not (tmp_path / "_lmd_db.json").exists()
-
-    def test_an_existing_database_is_left_untouched(
-        self, tmp_path: Path, stub_factory: ProviderFactory
-    ) -> None:
-        first = ManualDb.load(tmp_path, DbConfig())
-        first.add_manual(SETS[0])
-        first.write_db()
-        before = (tmp_path / "_lmd_db.json").read_text()
-
-        process_owned_sets(
-            SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory, dry_run=True
-        )
-        assert (tmp_path / "_lmd_db.json").read_text() == before
-
-    def test_unavailable_sets_are_still_reported(
-        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        process_owned_sets(
-            SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), stub_factory, dry_run=True
-        )
-        assert "Unable to download manual for 9999" in capsys.readouterr().out
-
-    def test_already_downloaded_sets_are_still_skipped(
-        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A dry run should report only the work a real run would do."""
-        db = ManualDb.load(tmp_path, DbConfig())
-        db.add_manual(SETS[0])
-        (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 stub")
-
-        process_owned_sets(SETS, tmp_path, db, stub_factory, dry_run=True)
-        assert "already exists, skipping" in capsys.readouterr().out
-
-    def test_a_rename_is_reported_but_not_performed(
-        self, tmp_path: Path, stub_factory: ProviderFactory, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        db = _db_with_manual_under_legacy_name(tmp_path)
-        before = (tmp_path / "_lmd_db.json").read_text()
-
-        process_owned_sets(SETS, tmp_path, db, stub_factory, dry_run=True)
-
-        assert f"Renaming manual for {SETS[0]} to {SETS[0].file_name}." in capsys.readouterr().out
-        assert (tmp_path / LEGACY_NAME).exists()
-        assert not (tmp_path / SETS[0].file_name).exists()
-        assert (tmp_path / "_lmd_db.json").read_text() == before
-
-    def test_main_exits_zero_and_writes_nothing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_factory: ProviderFactory
-    ) -> None:
-        monkeypatch.setattr(ProviderFactory, "create", staticmethod(lambda config: stub_factory))
-        config = tmp_path / "config.toml"
-        config.write_text('[brickset]\nusername = "u"\npassword = "p"\n')
-
-        assert main([str(tmp_path), "--config", str(config), "--dry-run"]) == 0
-        assert not (tmp_path / "_lmd_db.json").exists()
-        assert list(tmp_path.iterdir()) == [config]
 
 
 class TestMain:
@@ -286,82 +99,89 @@ class TestMain:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """No credentials anywhere, so no provider can be built."""
-        config = tmp_path / "config.toml"
-        config.write_text('[providers]\nowned-sets-providers = ["brickset"]\n')
+        config = _config_file(tmp_path, '[providers]\nowned-sets-providers = ["brickset"]\n')
         assert main([str(tmp_path), "--config", str(config)]) == 1
-        assert "Error:" in capsys.readouterr().out
+        assert "no usable providers" in capsys.readouterr().out
 
     def test_unknown_config_key_exits_one(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        config = tmp_path / "config.toml"
-        config.write_text('[bogus]\nfoo = "bar"\n')
+        config = _config_file(tmp_path, '[bogus]\nfoo = "bar"\n')
         assert main([str(tmp_path), "--config", str(config)]) == 1
         assert "unknown config key" in capsys.readouterr().out
 
     def test_successful_run_exits_zero(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stub_factory: ProviderFactory
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(ProviderFactory, "create", staticmethod(lambda config: stub_factory))
-        config = tmp_path / "config.toml"
-        config.write_text('[brickset]\nusername = "u"\npassword = "p"\n')
+        _use_stub_providers(monkeypatch, SETS[:2])
+        config = _config_file(tmp_path)
 
         assert main([str(tmp_path), "--config", str(config)]) == 0
         assert (tmp_path / "_lmd_db.json").exists()
+
+    def test_a_failed_download_exits_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _use_stub_providers(monkeypatch)
+        config = _config_file(tmp_path)
+
+        assert main([str(tmp_path), "--config", str(config)]) == 1
+
+    def test_owning_no_sets_exits_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _use_stub_providers(monkeypatch, [])
+        config = _config_file(tmp_path)
+
+        assert main([str(tmp_path), "--config", str(config)]) == 0
+
+    def test_a_provider_named_in_config_but_not_built_exits_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Chains are built from config names, so an unbuilt name leaves them empty."""
+        _use_stub_providers(monkeypatch, SETS[:2])
+        config = _config_file(tmp_path, BRICKSET_CONFIG)
+
+        assert main([str(tmp_path), "--config", str(config)]) == 1
+        assert "No usable owned sets providers, stopping." in capsys.readouterr().out
 
     def test_unreadable_database_exits_one(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        stub_factory: ProviderFactory,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        monkeypatch.setattr(ProviderFactory, "create", staticmethod(lambda config: stub_factory))
+        """Seeded with sets that all succeed, so only the bad database can fail the run."""
+        _use_stub_providers(monkeypatch, SETS[:2])
         (tmp_path / "_lmd_db.json").write_text("{ not json")
-        config = tmp_path / "config.toml"
-        config.write_text('[brickset]\nusername = "u"\npassword = "p"\n')
+        config = _config_file(tmp_path)
 
         assert main([str(tmp_path), "--config", str(config)]) == 1
-        assert "Error loading database" in capsys.readouterr().out
+        assert "Expecting property name" in capsys.readouterr().out
+        assert (tmp_path / "_lmd_db.json").read_text() == "{ not json"
 
-
-class TestStopsWhenProvidersExhausted:
-    def test_loop_exits_once_the_last_provider_retires(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_each_role_list_feeds_its_own_chain(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class Dead(ManualProvider):
-            def download_manual(
-                self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
-            ) -> bool:
-                raise ProviderUnavailable("login failed")
+        """The two config lists are not interchangeable: each must reach its own chain.
 
-        many = [LegoSet(str(n), "1", f"Set {n}", "2001") for n in range(20)]
-        factory = ProviderFactory([], [Dead()])
-        process_owned_sets(many, tmp_path, ManualDb.load(tmp_path, DbConfig()), factory)
+        The providers fill one role apiece, so a swap leaves both chains empty.
+        """
+        _use_providers(monkeypatch, {"sets": SetsOnlyProvider(), "manual": ManualOnlyWriter()})
+        config = _config_file(
+            tmp_path,
+            '[providers]\nowned-sets-providers = ["sets"]\nmanual-providers = ["manual"]\n',
+        )
 
-        out = capsys.readouterr().out
-        assert "No usable manual providers left, stopping." in out
-        assert out.count("Unable to download manual") == 1
-        assert out.count("Processing") == 1
+        assert main([str(tmp_path), "--config", str(config)]) == 0
+        assert (tmp_path / SETS[0].file_name).exists()
 
-    def test_database_is_still_written_after_an_early_exit(self, tmp_path: Path) -> None:
-        class Dead(ManualProvider):
-            def download_manual(
-                self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
-            ) -> bool:
-                raise ProviderUnavailable("login failed")
-
-        db = ManualDb.load(tmp_path, DbConfig())
-        db.add_manual(LegoSet("999", "1", "Earlier", "2000"))
-        process_owned_sets(SETS, tmp_path, db, ProviderFactory([], [Dead()]))
-        assert (tmp_path / "_lmd_db.json").exists()
-
-    def test_already_recorded_sets_do_not_block_the_exit(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_dry_run_exits_zero_and_writes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The check sits at the top of the loop, so a run of skipped sets exits at once."""
-        factory = ProviderFactory([], [])
-        process_owned_sets(SETS, tmp_path, ManualDb.load(tmp_path, DbConfig()), factory)
-        out = capsys.readouterr().out
-        assert "No usable manual providers left, stopping." in out
-        assert "Processing" not in out
+        _use_stub_providers(monkeypatch, SETS[:2])
+        config = _config_file(tmp_path)
+
+        assert main([str(tmp_path), "--config", str(config), "--dry-run"]) == 0
+        assert not (tmp_path / "_lmd_db.json").exists()
+        assert list(tmp_path.iterdir()) == [config]

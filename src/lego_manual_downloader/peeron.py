@@ -8,9 +8,15 @@ from PIL import Image
 
 from lego_manual_downloader.config import Config, PeeronConfig
 from lego_manual_downloader.files import atomic_write
-from lego_manual_downloader.http import new_session
+from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.providers import AuthenticatedProvider, ManualProvider
+from lego_manual_downloader.providers import (
+    AuthenticatedProvider,
+    BaseProvider,
+    InstructionsProvider,
+    ProviderBuilder,
+    require_credentials,
+)
 
 _AUTH_COOKIE = "PeeronSID"
 
@@ -19,15 +25,12 @@ class PeeronLoginError(Exception):
     pass
 
 
-class Peeron(AuthenticatedProvider, ManualProvider):
+class Peeron(AuthenticatedProvider, BaseProvider, InstructionsProvider):
     label = "peeron"
 
-    def __init__(self, config: Config) -> None:
-        if config.peeron is None:
-            raise ValueError("Peeron provider requires 'peeron' section in config")
-        if not config.peeron.username or not config.peeron.password:
-            raise ValueError("Peeron provider requires 'username' and 'password' in config")
-        self.config: PeeronConfig = config.peeron
+    def __init__(self, config: PeeronConfig, connection_manager: ConnectionManager) -> None:
+        self.config: PeeronConfig = config
+        self.connection_manager = connection_manager
 
     def login(self) -> requests.Session:
         """Login to peeron.com and return a session with the auth cookie.
@@ -35,7 +38,7 @@ class Peeron(AuthenticatedProvider, ManualProvider):
         The CGI login form carries no CSRF or state fields, so the credentials are
         posted directly without fetching the form first.
         """
-        session = new_session()
+        session = self.connection_manager.session()
 
         login_url = self.config.login_url
         url_parts = urlsplit(login_url)
@@ -87,10 +90,9 @@ class Peeron(AuthenticatedProvider, ManualProvider):
                 title=output_path.stem,
             )
 
-    def download_manual(
-        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
-    ) -> bool:
+    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
         """Download the instruction manual for a given set number to the specified output path."""
+        # Peeron indexes by the base set number, not including variant.
         page_scan_urls = self.get_page_scan_urls(lego_set.number)
         if not page_scan_urls:
             print(f"{self.label}: no images found for {lego_set.set_number}")
@@ -100,3 +102,13 @@ class Peeron(AuthenticatedProvider, ManualProvider):
             return True
         self.download_pdf(page_scan_urls, output_path)
         return True
+
+    @staticmethod
+    def builder(config: Config, connection_manager: ConnectionManager) -> "PeeronBuilder":
+        return PeeronBuilder(config, connection_manager)
+
+
+class PeeronBuilder(ProviderBuilder):
+    def build(self) -> Peeron:
+        config = require_credentials("peeron", self.config.peeron)
+        return Peeron(config, self.connection_manager)
