@@ -9,13 +9,15 @@ import responses
 from conftest import BRICKSET_BASE, INSTRUCTIONS_CSV, LOGIN_FORM_HTML, OWNED_SETS_CSV
 from lego_manual_downloader.brickset import (
     Brickset,
+    BricksetBuilder,
     BricksetLoginError,
     _build_login_payload,
     _find_error_message,
 )
 from lego_manual_downloader.config import BricksetConfig, Config
+from lego_manual_downloader.http import SessionBuilder
 from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.providers import ProviderUnavailable
+from lego_manual_downloader.providers import ProviderConfigError, ProviderUnavailable
 
 LOGIN_URL = f"{BRICKSET_BASE}/login"
 OWNED_URL = f"{BRICKSET_BASE}/exportscripts/sets/owned/"
@@ -30,8 +32,8 @@ def _body(raw: object) -> str:
 
 
 @pytest.fixture
-def brickset(full_config: Config) -> Brickset:
-    return Brickset(full_config)
+def brickset(brickset_config: BricksetConfig, session_builder: SessionBuilder) -> Brickset:
+    return Brickset(brickset_config, session_builder)
 
 
 class FakeResponse:
@@ -77,15 +79,17 @@ class TestUrlComposition:
         assert brickset.owned_sets_url == OWNED_URL
         assert brickset.instructions_url == INSTRUCTIONS_URL
 
-    def test_trailing_slash_on_base_url_does_not_double(self) -> None:
-        config = Config(
-            brickset=BricksetConfig(username="u", password="p", base_url=f"{BRICKSET_BASE}/")
-        )
-        assert Brickset(config).owned_sets_url == OWNED_URL
+    def test_trailing_slash_on_base_url_does_not_double(
+        self, session_builder: SessionBuilder
+    ) -> None:
+        config = BricksetConfig(username="u", password="p", base_url=f"{BRICKSET_BASE}/")
+        assert Brickset(config, session_builder).owned_sets_url == OWNED_URL
 
-    def test_missing_section_raises(self) -> None:
-        with pytest.raises(ValueError, match="brickset"):
-            Brickset(Config())
+    def test_missing_section_is_rejected_by_the_builder(
+        self, session_builder: SessionBuilder
+    ) -> None:
+        with pytest.raises(ProviderConfigError, match="brickset"):
+            BricksetBuilder(Config(), session_builder).build()
 
 
 class TestLoginPayload:
@@ -168,10 +172,12 @@ class TestLogin:
             _ = brickset.session
         assert isinstance(excinfo.value.__cause__, requests.HTTPError)
 
-    def test_blank_credentials_rejected_at_construction(self) -> None:
+    def test_blank_credentials_are_rejected_by_the_builder(
+        self, session_builder: SessionBuilder
+    ) -> None:
         config = Config(brickset=BricksetConfig(username="", password=""))
-        with pytest.raises(ValueError, match="username"):
-            Brickset(config)
+        with pytest.raises(ProviderConfigError, match="username"):
+            BricksetBuilder(config, session_builder).build()
 
 
 class TestOwnedSets:
@@ -214,7 +220,9 @@ class TestDownloadManual:
             }
         )
         output = tmp_path / "out.pdf"
-        assert brickset.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
+        assert brickset.download_manual(
+            LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=False
+        )
         assert output.read_bytes() == b"%PDF-1.4 payload"
 
     def test_dropped_connection_leaves_no_partial_file(
@@ -229,7 +237,7 @@ class TestDownloadManual:
         )
         output = tmp_path / "out.pdf"
         with pytest.raises(requests.ConnectionError):
-            brickset.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
+            brickset.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=False)
 
         assert not list(tmp_path.iterdir())
 
@@ -240,7 +248,9 @@ class TestDownloadManual:
             {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
         )  # type: ignore[assignment]
         output = tmp_path / "out.pdf"
-        assert not brickset.download_manual(LegoSet("0000", "1", "Nope", "1999"), output)
+        assert not brickset.download_manual(
+            LegoSet("0000", "1", "Nope", "1999"), output, dry_run=False
+        )
         assert not output.exists()
 
     def test_set_with_blank_url_returns_false(self, brickset: Brickset, tmp_path: Path) -> None:
@@ -248,7 +258,7 @@ class TestDownloadManual:
             {INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)}
         )  # type: ignore[assignment]
         assert not brickset.download_manual(
-            LegoSet("6080", "1", "Castle", "1984"), tmp_path / "o.pdf"
+            LegoSet("6080", "1", "Castle", "1984"), tmp_path / "o.pdf", dry_run=False
         )
 
 
@@ -340,5 +350,7 @@ class TestLoginIsAttemptedOnce:
         calls = self.counting_login(brickset, requests.ConnectionError("offline"))
         for n in range(5):
             with pytest.raises(ProviderUnavailable):
-                brickset.download_manual(LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf")
+                brickset.download_manual(
+                    LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf", dry_run=False
+                )
         assert len(calls) == 1

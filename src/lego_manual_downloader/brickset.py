@@ -8,12 +8,15 @@ import requests
 
 from lego_manual_downloader.config import BricksetConfig, Config
 from lego_manual_downloader.files import atomic_write
-from lego_manual_downloader.http import new_session
+from lego_manual_downloader.http import SessionBuilder
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.providers import (
-    AuthenticatedProvider,
+    AuthenticationProvider,
     ManualProvider,
     OwnedSetsProvider,
+    ProviderBase,
+    ProviderBuilder,
+    require_credentials,
 )
 
 _LOGIN_URL = "/login"
@@ -64,21 +67,18 @@ def _find_error_message(html: str) -> str:
     return "Brickset rejected the credentials"
 
 
-class Brickset(AuthenticatedProvider, OwnedSetsProvider, ManualProvider):
+class Brickset(AuthenticationProvider, ProviderBase, OwnedSetsProvider, ManualProvider):
     label = "brickset"
 
-    def __init__(self, config: Config) -> None:
-        if config.brickset is None:
-            raise ValueError("Brickset provider requires 'brickset' section in config")
-        if not config.brickset.username or not config.brickset.password:
-            raise ValueError("Brickset provider requires 'username' and 'password' in config")
-        self.config: BricksetConfig = config.brickset
+    def __init__(self, config: BricksetConfig, session_builder: SessionBuilder) -> None:
+        self.config: BricksetConfig = config
+        self.session_builder = session_builder
         self.owned_sets_url = urljoin(self.config.base_url, self.config.owned_sets_url)
         self.instructions_url = urljoin(self.config.base_url, self.config.instructions_url)
 
     def login(self) -> requests.Session:
         "Login to brickset.com and return a session with the auth cookie."
-        session = new_session()
+        session = self.session_builder.session()
 
         login_url = urljoin(self.config.base_url, _LOGIN_URL)
         login_page = session.get(login_url)
@@ -122,9 +122,7 @@ class Brickset(AuthenticatedProvider, OwnedSetsProvider, ManualProvider):
             for line in csv.DictReader(response.text.splitlines())
         ]
 
-    def download_manual(
-        self, lego_set: LegoSet, output_path: Path, *, dry_run: bool = False
-    ) -> bool:
+    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
         url = self.instructions.get(lego_set.set_number)
         if not url:
             return False
@@ -137,3 +135,13 @@ class Brickset(AuthenticatedProvider, OwnedSetsProvider, ManualProvider):
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
         return True
+
+    @staticmethod
+    def builder(config: Config, session_builder: SessionBuilder) -> "BricksetBuilder":
+        return BricksetBuilder(config, session_builder)
+
+
+class BricksetBuilder(ProviderBuilder):
+    def build(self) -> Brickset:
+        config = require_credentials("brickset", self.config.brickset)
+        return Brickset(config, self.session_builder)

@@ -8,9 +8,10 @@ from PIL import Image
 
 from conftest import PEERON_LOGIN, PEERON_SCANS, PEERON_THUMBS
 from lego_manual_downloader.config import Config, PeeronConfig
+from lego_manual_downloader.http import SessionBuilder
 from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.peeron import Peeron, PeeronLoginError
-from lego_manual_downloader.providers import ProviderUnavailable
+from lego_manual_downloader.peeron import Peeron, PeeronBuilder, PeeronLoginError
+from lego_manual_downloader.providers import ProviderConfigError, ProviderUnavailable
 
 SET_PAGE_URL = f"{PEERON_SCANS}10179/"
 
@@ -34,8 +35,8 @@ def _body(raw: object) -> str:
 
 
 @pytest.fixture
-def peeron(full_config: Config) -> Peeron:
-    return Peeron(full_config)
+def peeron(peeron_config: PeeronConfig, session_builder: SessionBuilder) -> Peeron:
+    return Peeron(peeron_config, session_builder)
 
 
 class FakeResponse:
@@ -62,17 +63,17 @@ class TestUrlComposition:
         assert peeron.get_url("10179") == SET_PAGE_URL
         assert "//" not in peeron.get_url("10179").removeprefix("http://")
 
-    def test_scans_url_without_trailing_slash_still_joins(self) -> None:
-        config = Config(
-            peeron=PeeronConfig(
-                username="u", password="p", scans_url="http://peeron.example/scans/"
-            )
-        )
-        assert Peeron(config).get_url("1") == "http://peeron.example/scans/1/"
+    def test_scans_url_without_trailing_slash_still_joins(
+        self, session_builder: SessionBuilder
+    ) -> None:
+        config = PeeronConfig(username="u", password="p", scans_url="http://peeron.example/scans/")
+        assert Peeron(config, session_builder).get_url("1") == "http://peeron.example/scans/1/"
 
-    def test_missing_section_raises(self) -> None:
-        with pytest.raises(ValueError, match="peeron"):
-            Peeron(Config())
+    def test_missing_section_is_rejected_by_the_builder(
+        self, session_builder: SessionBuilder
+    ) -> None:
+        with pytest.raises(ProviderConfigError, match="peeron"):
+            PeeronBuilder(Config(), session_builder).build()
 
 
 class TestLogin:
@@ -96,10 +97,12 @@ class TestLogin:
             _ = peeron.session
         assert "rejected the credentials" in str(excinfo.value.__cause__)
 
-    def test_blank_credentials_rejected_at_construction(self) -> None:
+    def test_blank_credentials_are_rejected_by_the_builder(
+        self, session_builder: SessionBuilder
+    ) -> None:
         config = Config(peeron=PeeronConfig(username="", password=""))
-        with pytest.raises(ValueError, match="username"):
-            Peeron(config)
+        with pytest.raises(ProviderConfigError, match="username"):
+            PeeronBuilder(config, session_builder).build()
 
 
 class TestGetPageScanUrls:
@@ -178,7 +181,9 @@ class TestDownloadManual:
     ) -> None:
         peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
         output = tmp_path / "manual.pdf"
-        assert not peeron.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
+        assert not peeron.download_manual(
+            LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=False
+        )
         assert not output.exists()
         assert "no images found" in capsys.readouterr().out
 
@@ -192,7 +197,9 @@ class TestDownloadManual:
             }
         )
         output = tmp_path / "manual.pdf"
-        assert peeron.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output)
+        assert peeron.download_manual(
+            LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=False
+        )
         assert output.read_bytes().startswith(b"%PDF")
 
 
@@ -273,5 +280,7 @@ class TestLoginIsAttemptedOnce:
         calls = self.counting_login(peeron, requests.ConnectionError("offline"))
         for n in range(5):
             with pytest.raises(ProviderUnavailable):
-                peeron.download_manual(LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf")
+                peeron.download_manual(
+                    LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf", dry_run=False
+                )
         assert len(calls) == 1

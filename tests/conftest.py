@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 from lego_manual_downloader import config as config_module
-from lego_manual_downloader.config import BricksetConfig, Config, PeeronConfig
+from lego_manual_downloader.config import BricksetConfig, Config, HttpConfig, PeeronConfig
+from lego_manual_downloader.http import SessionBuilder
 from lego_manual_downloader.lego import LegoSet
 
 BRICKSET_BASE = "https://brickset.example"
@@ -18,6 +19,16 @@ def isolate_default_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> I
     """Never let a test read the developer's real ~/.config file."""
     monkeypatch.setattr(config_module, "_DEFAULT_CONFIG_PATH", tmp_path / "absent" / "config.toml")
     yield
+
+
+@pytest.fixture
+def http_config() -> HttpConfig:
+    return HttpConfig()
+
+
+@pytest.fixture
+def session_builder(http_config: HttpConfig) -> SessionBuilder:
+    return SessionBuilder(http_config)
 
 
 @pytest.fixture
