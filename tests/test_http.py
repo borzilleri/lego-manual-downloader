@@ -6,7 +6,7 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from lego_manual_downloader.config import HttpConfig
-from lego_manual_downloader.http import USER_AGENT, SessionBuilder, TimeoutHttpAdapter
+from lego_manual_downloader.http import USER_AGENT, ConnectionManager, TimeoutHttpAdapter
 
 
 def _prepared() -> requests.PreparedRequest:
@@ -17,19 +17,19 @@ def test_user_agent_identifies_the_tool() -> None:
     assert re.fullmatch(r"lego-manual-downloader/\S+", USER_AGENT)
 
 
-def test_session_sets_the_user_agent(session_builder: SessionBuilder) -> None:
-    assert session_builder.session().headers["User-Agent"] == USER_AGENT
+def test_session_sets_the_user_agent(connection_manager: ConnectionManager) -> None:
+    assert connection_manager.session().headers["User-Agent"] == USER_AGENT
 
 
-def test_session_returns_a_fresh_session_each_time(session_builder: SessionBuilder) -> None:
-    first, second = session_builder.session(), session_builder.session()
+def test_session_returns_a_fresh_session_each_time(connection_manager: ConnectionManager) -> None:
+    first, second = connection_manager.session(), connection_manager.session()
     assert first is not second
     first.headers["X-Test"] = "1"
     assert "X-Test" not in second.headers
 
 
-def test_session_has_an_empty_cookie_jar(session_builder: SessionBuilder) -> None:
-    assert len(session_builder.session().cookies) == 0
+def test_session_has_an_empty_cookie_jar(connection_manager: ConnectionManager) -> None:
+    assert len(connection_manager.session().cookies) == 0
 
 
 class TestTimeout:
@@ -48,7 +48,7 @@ class TestTimeout:
 
     @pytest.mark.parametrize("scheme", ["http://", "https://"])
     def test_both_schemes_are_mounted_with_the_configured_timeout(self, scheme: str) -> None:
-        session = SessionBuilder(HttpConfig(timeout=7)).session()
+        session = ConnectionManager(HttpConfig(timeout=7)).session()
         adapter = session.get_adapter(f"{scheme}example.com")
         assert isinstance(adapter, TimeoutHttpAdapter)
         assert adapter.timeout == 7

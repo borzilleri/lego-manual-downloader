@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from lego_manual_downloader.config import DbConfig
-from lego_manual_downloader.db import ManualDb, ManualStatus, StoredManual
+from lego_manual_downloader.db import JsonInstructionsDb, ManualStatus, StoredManual
 from lego_manual_downloader.lego import LegoSet
 
 FALCON = LegoSet("10179", "1", "Millennium Falcon", "2007")
@@ -21,15 +21,15 @@ def _place_manual(download_path: Path, name: str) -> None:
     (download_path / name).write_bytes(b"%PDF-1.4 stub")
 
 
-def _db_recording(tmp_path: Path, file_name: str, on_disk: bool = False) -> ManualDb:
+def _db_recording(tmp_path: Path, file_name: str, on_disk: bool = False) -> JsonInstructionsDb:
     """A DB whose one entry says FALCON's manual is called `file_name`."""
     entry = {**FALCON_FIELDS, "file": file_name}
     if on_disk:
         _place_manual(tmp_path, file_name)
-    return ManualDb(tmp_path, tmp_path / "_lmd_db.json", {"10179-1": entry})
+    return JsonInstructionsDb(tmp_path, tmp_path / "_lmd_db.json", {"10179-1": entry})
 
 
-def _record(db: ManualDb, lego_set: LegoSet, on_disk: bool = True) -> None:
+def _record(db: JsonInstructionsDb, lego_set: LegoSet, on_disk: bool = True) -> None:
     """Record a set, optionally creating the manual it points at."""
     db.add_manual(lego_set)
     if on_disk:
@@ -37,22 +37,22 @@ def _record(db: ManualDb, lego_set: LegoSet, on_disk: bool = True) -> None:
 
 
 def test_load_missing_file_starts_empty(tmp_path: Path) -> None:
-    db = ManualDb.load(tmp_path, DbConfig())
+    db = JsonInstructionsDb.load(tmp_path, DbConfig())
     assert db.db == {}
     assert db.db_file == tmp_path / "_lmd_db.json"
 
 
 def test_load_honours_configured_filename(tmp_path: Path) -> None:
-    db = ManualDb.load(tmp_path, DbConfig(file="custom.json"))
+    db = JsonInstructionsDb.load(tmp_path, DbConfig(file="custom.json"))
     assert db.db_file == tmp_path / "custom.json"
 
 
 def test_add_then_write_then_reload_round_trips(tmp_path: Path) -> None:
-    db = ManualDb.load(tmp_path, DbConfig())
+    db = JsonInstructionsDb.load(tmp_path, DbConfig())
     _record(db, FALCON)
     db.write_db()
 
-    reloaded = ManualDb.load(tmp_path, DbConfig())
+    reloaded = JsonInstructionsDb.load(tmp_path, DbConfig())
     assert reloaded.check(FALCON, dry_run=False) is ManualStatus.PRESENT
     assert reloaded.db["10179-1"].lego_set == FALCON
     assert json.loads((tmp_path / "_lmd_db.json").read_text())["10179-1"] == {
@@ -62,7 +62,7 @@ def test_add_then_write_then_reload_round_trips(tmp_path: Path) -> None:
 
 
 def test_variants_of_one_set_number_do_not_collide(tmp_path: Path) -> None:
-    db = ManualDb.load(tmp_path, DbConfig())
+    db = JsonInstructionsDb.load(tmp_path, DbConfig())
     variant_two = LegoSet("10179", "2", "Millennium Falcon", "2017")
     _record(db, FALCON)
     _record(db, variant_two)
@@ -118,7 +118,7 @@ class TestUnreadableEntries:
     def test_an_entry_missing_a_field_is_dropped_with_a_warning(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        db = ManualDb(tmp_path, tmp_path / "_lmd_db.json", {"1-1": {"number": "1"}})
+        db = JsonInstructionsDb(tmp_path, tmp_path / "_lmd_db.json", {"1-1": {"number": "1"}})
         assert db.db == {}
         assert "Ignoring unreadable database entry '1-1'" in capsys.readouterr().out
 
@@ -136,20 +136,20 @@ class TestUnreadableEntries:
         }
         (tmp_path / "_lmd_db.json").write_text(json.dumps(legacy))
 
-        db = ManualDb.load(tmp_path, DbConfig())
+        db = JsonInstructionsDb.load(tmp_path, DbConfig())
         assert db.db == {}
         assert "Ignoring unreadable database entry '1478'" in capsys.readouterr().out
 
     def test_a_non_dict_entry_is_dropped_with_a_warning(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        db = ManualDb(tmp_path, tmp_path / "_lmd_db.json", {"1-1": "not an entry"})
+        db = JsonInstructionsDb(tmp_path, tmp_path / "_lmd_db.json", {"1-1": "not an entry"})
         assert db.db == {}
         assert "Ignoring unreadable database entry '1-1'" in capsys.readouterr().out
 
     def test_a_dropped_entry_falls_through_to_the_disk_check(self, tmp_path: Path) -> None:
         """Dropping a record must not hide a manual that is actually there."""
-        db = ManualDb(tmp_path, tmp_path / "_lmd_db.json", {"10179-1": {}})
+        db = JsonInstructionsDb(tmp_path, tmp_path / "_lmd_db.json", {"10179-1": {}})
         assert db.check(FALCON, dry_run=False) is ManualStatus.MISSING
 
         _place_manual(tmp_path, FALCON.file_name)
@@ -157,7 +157,9 @@ class TestUnreadableEntries:
 
     def test_entries_are_keyed_by_their_own_set_number(self, tmp_path: Path) -> None:
         """A record filed under the wrong key must still be found."""
-        db = ManualDb(tmp_path, tmp_path / "_lmd_db.json", {"wrong-key": dict(FALCON_FIELDS)})
+        db = JsonInstructionsDb(
+            tmp_path, tmp_path / "_lmd_db.json", {"wrong-key": dict(FALCON_FIELDS)}
+        )
         assert sorted(db.db) == ["10179-1"]
 
 
@@ -165,25 +167,25 @@ class TestCheck:
     """One case per (database entry, file on disk) state."""
 
     def test_unknown_set_with_no_file_is_missing(self, tmp_path: Path) -> None:
-        db = ManualDb.load(tmp_path, DbConfig())
+        db = JsonInstructionsDb.load(tmp_path, DbConfig())
         assert db.check(LegoSet("0000", "1", "Unknown", "1999"), dry_run=False) is (
             ManualStatus.MISSING
         )
 
     def test_a_manual_on_disk_but_not_in_the_db_is_adopted(self, tmp_path: Path) -> None:
         _place_manual(tmp_path, FALCON.file_name)
-        db = ManualDb.load(tmp_path, DbConfig())
+        db = JsonInstructionsDb.load(tmp_path, DbConfig())
 
         assert db.check(FALCON, dry_run=False) is ManualStatus.PRESENT
         assert db.db["10179-1"] == StoredManual(lego_set=FALCON, file_name=FALCON.file_name)
 
     def test_an_adopted_manual_survives_a_write(self, tmp_path: Path) -> None:
         _place_manual(tmp_path, FALCON.file_name)
-        db = ManualDb.load(tmp_path, DbConfig())
+        db = JsonInstructionsDb.load(tmp_path, DbConfig())
         db.check(FALCON, dry_run=False)
         db.write_db()
 
-        reloaded = ManualDb.load(tmp_path, DbConfig())
+        reloaded = JsonInstructionsDb.load(tmp_path, DbConfig())
         assert reloaded.db["10179-1"].lego_set == FALCON
 
     def test_a_recorded_manual_at_its_current_name_is_present(self, tmp_path: Path) -> None:
@@ -291,7 +293,7 @@ def test_existing_db_file_keeps_loading(tmp_path: Path) -> None:
     (tmp_path / "_lmd_db.json").write_text(json.dumps(existing))
     _place_manual(tmp_path, FALCON.file_name)
 
-    db = ManualDb.load(tmp_path, DbConfig())
+    db = JsonInstructionsDb.load(tmp_path, DbConfig())
     assert db.db["10179-1"].lego_set == FALCON
     assert db.check(FALCON, dry_run=False) is ManualStatus.PRESENT
 
@@ -300,20 +302,20 @@ def test_existing_db_file_keeps_loading(tmp_path: Path) -> None:
 
 
 def test_write_preserves_previously_recorded_entries(tmp_path: Path) -> None:
-    first = ManualDb.load(tmp_path, DbConfig())
+    first = JsonInstructionsDb.load(tmp_path, DbConfig())
     first.add_manual(LegoSet("1", "1", "One", "2001"))
     first.write_db()
 
-    second = ManualDb.load(tmp_path, DbConfig())
+    second = JsonInstructionsDb.load(tmp_path, DbConfig())
     second.add_manual(LegoSet("2", "1", "Two", "2002"))
     second.write_db()
 
-    third = ManualDb.load(tmp_path, DbConfig())
+    third = JsonInstructionsDb.load(tmp_path, DbConfig())
     assert sorted(third.db) == ["1-1", "2-1"]
 
 
 def test_written_file_is_valid_indented_json(tmp_path: Path) -> None:
-    db = ManualDb.load(tmp_path, DbConfig())
+    db = JsonInstructionsDb.load(tmp_path, DbConfig())
     db.add_manual(LegoSet("1", "1", "One", "2001"))
     db.write_db()
 
@@ -324,7 +326,7 @@ def test_written_file_is_valid_indented_json(tmp_path: Path) -> None:
 
 def test_write_leaves_no_temporary_file_behind(tmp_path: Path) -> None:
     """The DB is written atomically, like the manuals themselves."""
-    db = ManualDb.load(tmp_path, DbConfig())
+    db = JsonInstructionsDb.load(tmp_path, DbConfig())
     db.add_manual(LegoSet("1", "1", "One", "2001"))
     db.write_db()
 

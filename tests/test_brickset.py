@@ -15,9 +15,9 @@ from lego_manual_downloader.brickset import (
     _find_error_message,
 )
 from lego_manual_downloader.config import BricksetConfig, Config
-from lego_manual_downloader.http import SessionBuilder
+from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
-from lego_manual_downloader.providers import ProviderConfigError, ProviderUnavailable
+from lego_manual_downloader.providers import ProviderConfigError, ProviderUnavailableError
 
 LOGIN_URL = f"{BRICKSET_BASE}/login"
 OWNED_URL = f"{BRICKSET_BASE}/exportscripts/sets/owned/"
@@ -32,8 +32,8 @@ def _body(raw: object) -> str:
 
 
 @pytest.fixture
-def brickset(brickset_config: BricksetConfig, session_builder: SessionBuilder) -> Brickset:
-    return Brickset(brickset_config, session_builder)
+def brickset(brickset_config: BricksetConfig, connection_manager: ConnectionManager) -> Brickset:
+    return Brickset(brickset_config, connection_manager)
 
 
 class FakeResponse:
@@ -80,16 +80,16 @@ class TestUrlComposition:
         assert brickset.instructions_url == INSTRUCTIONS_URL
 
     def test_trailing_slash_on_base_url_does_not_double(
-        self, session_builder: SessionBuilder
+        self, connection_manager: ConnectionManager
     ) -> None:
         config = BricksetConfig(username="u", password="p", base_url=f"{BRICKSET_BASE}/")
-        assert Brickset(config, session_builder).owned_sets_url == OWNED_URL
+        assert Brickset(config, connection_manager).owned_sets_url == OWNED_URL
 
     def test_missing_section_is_rejected_by_the_builder(
-        self, session_builder: SessionBuilder
+        self, connection_manager: ConnectionManager
     ) -> None:
         with pytest.raises(ProviderConfigError, match="brickset"):
-            BricksetBuilder(Config(), session_builder).build()
+            BricksetBuilder(Config(), connection_manager).build()
 
 
 class TestLoginPayload:
@@ -153,7 +153,7 @@ class TestLogin:
     @responses.activate
     def test_missing_form_raises(self, brickset: Brickset) -> None:
         responses.get(LOGIN_URL, body="<html><body>no form here</body></html>")
-        with pytest.raises(ProviderUnavailable, match="brickset login failed") as excinfo:
+        with pytest.raises(ProviderUnavailableError, match="brickset login failed") as excinfo:
             _ = brickset.session
         assert "aspnetForm" in str(excinfo.value.__cause__)
 
@@ -161,23 +161,23 @@ class TestLogin:
     def test_absent_auth_cookie_raises_with_the_site_message(self, brickset: Brickset) -> None:
         responses.get(LOGIN_URL, body=LOGIN_FORM_HTML)
         responses.post(LOGIN_URL, body='<div class="error">Bad password.</div>')
-        with pytest.raises(ProviderUnavailable, match="brickset login failed") as excinfo:
+        with pytest.raises(ProviderUnavailableError, match="brickset login failed") as excinfo:
             _ = brickset.session
         assert "Bad password." in str(excinfo.value.__cause__)
 
     @responses.activate
     def test_http_error_is_wrapped(self, brickset: Brickset) -> None:
         responses.get(LOGIN_URL, status=503)
-        with pytest.raises(ProviderUnavailable, match="brickset login failed") as excinfo:
+        with pytest.raises(ProviderUnavailableError, match="brickset login failed") as excinfo:
             _ = brickset.session
         assert isinstance(excinfo.value.__cause__, requests.HTTPError)
 
     def test_blank_credentials_are_rejected_by_the_builder(
-        self, session_builder: SessionBuilder
+        self, connection_manager: ConnectionManager
     ) -> None:
         config = Config(brickset=BricksetConfig(username="", password=""))
         with pytest.raises(ProviderConfigError, match="username"):
-            BricksetBuilder(config, session_builder).build()
+            BricksetBuilder(config, connection_manager).build()
 
 
 class TestOwnedSets:
@@ -325,7 +325,7 @@ class TestLoginIsAttemptedOnce:
     def test_failed_login_is_attempted_once(self, brickset: Brickset, failure: Exception) -> None:
         calls = self.counting_login(brickset, failure)
         for _ in range(5):
-            with pytest.raises(ProviderUnavailable):
+            with pytest.raises(ProviderUnavailableError):
                 _ = brickset.session
         assert len(calls) == 1
 
@@ -340,7 +340,7 @@ class TestLoginIsAttemptedOnce:
     ) -> None:
         self.counting_login(brickset, requests.ConnectionError("offline"))
         for _ in range(5):
-            with pytest.raises(ProviderUnavailable):
+            with pytest.raises(ProviderUnavailableError):
                 _ = brickset.session
         assert capsys.readouterr().out.count("brickset: login failed") == 1
 
@@ -349,7 +349,7 @@ class TestLoginIsAttemptedOnce:
     ) -> None:
         calls = self.counting_login(brickset, requests.ConnectionError("offline"))
         for n in range(5):
-            with pytest.raises(ProviderUnavailable):
+            with pytest.raises(ProviderUnavailableError):
                 brickset.download_manual(
                     LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf", dry_run=False
                 )

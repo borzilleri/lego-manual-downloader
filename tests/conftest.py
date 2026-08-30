@@ -1,12 +1,14 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 from lego_manual_downloader import config as config_module
 from lego_manual_downloader.config import BricksetConfig, Config, HttpConfig, PeeronConfig
-from lego_manual_downloader.http import SessionBuilder
+from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
+from lego_manual_downloader.providers import BaseProvider, ProviderBuilder
 
 BRICKSET_BASE = "https://brickset.example"
 PEERON_LOGIN = "http://peeron.example/cgi-bin/login"
@@ -27,8 +29,8 @@ def http_config() -> HttpConfig:
 
 
 @pytest.fixture
-def session_builder(http_config: HttpConfig) -> SessionBuilder:
-    return SessionBuilder(http_config)
+def connection_manager(http_config: HttpConfig) -> ConnectionManager:
+    return ConnectionManager(http_config)
 
 
 @pytest.fixture
@@ -45,19 +47,6 @@ def peeron_config() -> PeeronConfig:
         scans_url=PEERON_SCANS,
         thumbs_url=PEERON_THUMBS,
     )
-
-
-@pytest.fixture
-def full_config(brickset_config: BricksetConfig, peeron_config: PeeronConfig) -> Config:
-    return Config(brickset=brickset_config, peeron=peeron_config)
-
-
-@pytest.fixture
-def lego_sets() -> list[LegoSet]:
-    return [
-        LegoSet("10179", "1", "Millennium Falcon", "2007"),
-        LegoSet("6080", "1", "King's Castle", "1984"),
-    ]
 
 
 OWNED_SETS_CSV = """Number,Variant,SetName,YearFrom
@@ -81,3 +70,114 @@ LOGIN_FORM_HTML = """
   </form>
 </body></html>
 """
+
+ONE = LegoSet("1", "1", "One", "2001")
+
+SETS = [
+    LegoSet("10179", "1", "Millennium Falcon", "2007"),
+    LegoSet("6080", "1", "King's Castle", "1984"),
+    LegoSet("9999", "1", "Unavailable", "2020"),
+]
+
+LEGACY_NAME = "10179 Falcon.pdf"
+
+
+class UnbuiltProvider(BaseProvider):
+    """A fake handed straight to a chain, so it is never built from config."""
+
+    @staticmethod
+    def builder(config: Config, connection_manager: ConnectionManager) -> ProviderBuilder:
+        raise NotImplementedError
+
+
+class StubProvider(UnbuiltProvider):
+    """Serves every set except 9999, which no provider can supply."""
+
+    def __init__(self, sets: list[LegoSet] | None = None) -> None:
+        self.sets = list(SETS) if sets is None else sets
+
+    def get_owned_sets(self) -> list[LegoSet]:
+        return self.sets
+
+    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
+        if lego_set.number == "9999":
+            return False
+        if dry_run:
+            return True
+        output_path.write_bytes(b"%PDF-1.4 stub")
+        return True
+
+
+class _FakeBuilder(ProviderBuilder):
+    """Mirrors the real builders; the fakes need no config of their own."""
+
+    provider_class: ClassVar[type[BaseProvider]]
+
+    def build(self) -> BaseProvider:
+        return self.provider_class()
+
+
+class FakeBoth(BaseProvider):
+    """Stands in for Brickset: serves both roles."""
+
+    instances_created = 0
+
+    def __init__(self) -> None:
+        self.downloads: list[str] = []
+        self.dry_runs: list[bool] = []
+        FakeBoth.instances_created += 1
+
+    def get_owned_sets(self) -> list[LegoSet]:
+        return [ONE]
+
+    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
+        self.downloads.append(lego_set.number)
+        self.dry_runs.append(dry_run)
+        return True
+
+    @staticmethod
+    def builder(config: Config, connection_manager: ConnectionManager) -> ProviderBuilder:
+        return BothBuilder(config, connection_manager)
+
+
+class BothBuilder(_FakeBuilder):
+    provider_class = FakeBoth
+
+
+@pytest.fixture(autouse=True)
+def reset_instance_counter() -> None:
+    """`instances_created` is class state shared by every module that builds a FakeBoth,
+    so it is zeroed for all of them rather than by whichever fixture happens to run.
+    """
+    FakeBoth.instances_created = 0
+
+
+class FakeManualOnly(BaseProvider):
+    """Stands in for Peeron: serves manuals only."""
+
+    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
+        return False
+
+    @staticmethod
+    def builder(config: Config, connection_manager: ConnectionManager) -> ProviderBuilder:
+        return ManualOnlyBuilder(config, connection_manager)
+
+
+class ManualOnlyBuilder(_FakeBuilder):
+    provider_class = FakeManualOnly
+
+
+class SetsOnlyProvider(UnbuiltProvider):
+    """Fills the owned-sets role and nothing else, so a role mix-up is visible."""
+
+    def get_owned_sets(self) -> list[LegoSet]:
+        return SETS[:1]
+
+
+class ManualOnlyWriter(UnbuiltProvider):
+    """Fills the manual role and nothing else, writing a file so a run can succeed."""
+
+    def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
+        if not dry_run:
+            output_path.write_bytes(b"%PDF-1.4 stub")
+        return True

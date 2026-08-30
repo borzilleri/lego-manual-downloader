@@ -39,7 +39,7 @@ class TimeoutHttpAdapter(HTTPAdapter):
         )
 
 
-class SessionBuilder:
+class ConnectionManager:
     def __init__(self, config: HttpConfig) -> None:
         self.config = config
 

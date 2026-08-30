@@ -8,10 +8,10 @@ from PIL import Image
 
 from conftest import PEERON_LOGIN, PEERON_SCANS, PEERON_THUMBS
 from lego_manual_downloader.config import Config, PeeronConfig
-from lego_manual_downloader.http import SessionBuilder
+from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.peeron import Peeron, PeeronBuilder, PeeronLoginError
-from lego_manual_downloader.providers import ProviderConfigError, ProviderUnavailable
+from lego_manual_downloader.providers import ProviderConfigError, ProviderUnavailableError
 
 SET_PAGE_URL = f"{PEERON_SCANS}10179/"
 
@@ -35,8 +35,8 @@ def _body(raw: object) -> str:
 
 
 @pytest.fixture
-def peeron(peeron_config: PeeronConfig, session_builder: SessionBuilder) -> Peeron:
-    return Peeron(peeron_config, session_builder)
+def peeron(peeron_config: PeeronConfig, connection_manager: ConnectionManager) -> Peeron:
+    return Peeron(peeron_config, connection_manager)
 
 
 class FakeResponse:
@@ -64,16 +64,16 @@ class TestUrlComposition:
         assert "//" not in peeron.get_url("10179").removeprefix("http://")
 
     def test_scans_url_without_trailing_slash_still_joins(
-        self, session_builder: SessionBuilder
+        self, connection_manager: ConnectionManager
     ) -> None:
         config = PeeronConfig(username="u", password="p", scans_url="http://peeron.example/scans/")
-        assert Peeron(config, session_builder).get_url("1") == "http://peeron.example/scans/1/"
+        assert Peeron(config, connection_manager).get_url("1") == "http://peeron.example/scans/1/"
 
     def test_missing_section_is_rejected_by_the_builder(
-        self, session_builder: SessionBuilder
+        self, connection_manager: ConnectionManager
     ) -> None:
         with pytest.raises(ProviderConfigError, match="peeron"):
-            PeeronBuilder(Config(), session_builder).build()
+            PeeronBuilder(Config(), connection_manager).build()
 
 
 class TestLogin:
@@ -93,16 +93,16 @@ class TestLogin:
     @responses.activate
     def test_absent_cookie_raises(self, peeron: Peeron) -> None:
         responses.post(PEERON_LOGIN, body="login failed")
-        with pytest.raises(ProviderUnavailable, match="peeron login failed") as excinfo:
+        with pytest.raises(ProviderUnavailableError, match="peeron login failed") as excinfo:
             _ = peeron.session
         assert "rejected the credentials" in str(excinfo.value.__cause__)
 
     def test_blank_credentials_are_rejected_by_the_builder(
-        self, session_builder: SessionBuilder
+        self, connection_manager: ConnectionManager
     ) -> None:
         config = Config(peeron=PeeronConfig(username="", password=""))
         with pytest.raises(ProviderConfigError, match="username"):
-            PeeronBuilder(config, session_builder).build()
+            PeeronBuilder(config, connection_manager).build()
 
 
 class TestGetPageScanUrls:
@@ -255,7 +255,7 @@ class TestLoginIsAttemptedOnce:
     def test_failed_login_is_attempted_once(self, peeron: Peeron, failure: Exception) -> None:
         calls = self.counting_login(peeron, failure)
         for _ in range(5):
-            with pytest.raises(ProviderUnavailable):
+            with pytest.raises(ProviderUnavailableError):
                 _ = peeron.session
         assert len(calls) == 1
 
@@ -270,7 +270,7 @@ class TestLoginIsAttemptedOnce:
     ) -> None:
         self.counting_login(peeron, requests.ConnectionError("offline"))
         for _ in range(5):
-            with pytest.raises(ProviderUnavailable):
+            with pytest.raises(ProviderUnavailableError):
                 _ = peeron.session
         assert capsys.readouterr().out.count("peeron: login failed") == 1
 
@@ -279,7 +279,7 @@ class TestLoginIsAttemptedOnce:
     ) -> None:
         calls = self.counting_login(peeron, requests.ConnectionError("offline"))
         for n in range(5):
-            with pytest.raises(ProviderUnavailable):
+            with pytest.raises(ProviderUnavailableError):
                 peeron.download_manual(
                     LegoSet(str(n), "1", "Set", "2001"), tmp_path / "x.pdf", dry_run=False
                 )

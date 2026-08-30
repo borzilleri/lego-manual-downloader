@@ -3,53 +3,11 @@ import os
 from pathlib import Path
 
 from lego_manual_downloader import http
-from lego_manual_downloader.config import Config, ConfigError
-from lego_manual_downloader.db import ManualDb, ManualStatus
-from lego_manual_downloader.provider_factory import ProviderManager, create_provider_manager
-
-
-def process_owned_sets(
-    download_path: Path,
-    provider_manager: ProviderManager,
-    db: ManualDb,
-    dry_run: bool,
-) -> bool:
-    """Download a manual for each owned set that is not already in the database."""
-    lego_sets = provider_manager.sets_provider_chain.get_owned_sets()
-    success = True
-    if not lego_sets:
-        print("No owned sets found.")
-        return success
-    try:
-        manual_providers = provider_manager.manual_provider_chain
-        for lego_set in lego_sets:
-            try:
-                if not manual_providers.has_providers():
-                    print("No usable manual providers left, stopping.")
-                    success = False
-                    break
-                print(f"Processing {lego_set}")
-                status = db.check(lego_set, dry_run=dry_run)
-                if status == ManualStatus.PRESENT:
-                    print(f"Manual for {lego_set} already exists, skipping.")
-                elif status == ManualStatus.RENAMED:
-                    print(f"Manual for {lego_set} found, renamed to {lego_set.file_name}.")
-                elif status == ManualStatus.MISSING:
-                    print(f"Manual for {lego_set} is missing, downloading.")
-                    output_path = download_path / lego_set.file_name
-                    if manual_providers.download_manual(lego_set, output_path, dry_run=dry_run):
-                        if not dry_run:
-                            db.add_manual(lego_set)
-                    else:
-                        print(f"Unable to download manual for {lego_set}")
-                        success = False
-            except Exception as e:
-                print(f"Error processing owned sets: {e}")
-                success = False
-    finally:
-        if not dry_run:
-            db.write_db()
-    return success
+from lego_manual_downloader.config import Config
+from lego_manual_downloader.db import JsonInstructionsDb
+from lego_manual_downloader.downloader import download_instruction_manuals
+from lego_manual_downloader.provider_builder import create_providers
+from lego_manual_downloader.provider_chain import InstructionsProviderChain, SetsProviderChain
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -86,21 +44,25 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = Config.load(args.config)
-        provider_manager = create_provider_manager(config, http.SessionBuilder(config.http))
-    except ConfigError as e:
+        connection_manager = http.ConnectionManager(config.http)
+        providers = create_providers(config, connection_manager)
+        db = JsonInstructionsDb.load(args.download_dir, config.db)
+    except Exception as e:
         print(f"Error: {e}")
         return 1
 
-    try:
-        db = ManualDb.load(args.download_dir, config.db)
-    except Exception as e:
-        print(f"Error loading database: {e}")
-        return 1
+    sets_provider_chain = SetsProviderChain.create(
+        list(config.providers.owned_sets_providers), providers
+    )
+    instructions_provider_chain = InstructionsProviderChain.create(
+        list(config.providers.manual_providers), providers
+    )
 
-    success = process_owned_sets(
+    success = download_instruction_manuals(
         args.download_dir,
-        provider_manager,
         db,
+        sets_provider_chain,
+        instructions_provider_chain,
         dry_run=args.dry_run,
     )
     return 0 if success else 1

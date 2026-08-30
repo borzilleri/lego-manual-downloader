@@ -8,13 +8,13 @@ import requests
 
 from lego_manual_downloader.config import BricksetConfig, Config
 from lego_manual_downloader.files import atomic_write
-from lego_manual_downloader.http import SessionBuilder
+from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.providers import (
-    AuthenticationProvider,
-    ManualProvider,
+    AuthenticatedProvider,
+    BaseProvider,
+    InstructionsProvider,
     OwnedSetsProvider,
-    ProviderBase,
     ProviderBuilder,
     require_credentials,
 )
@@ -67,18 +67,18 @@ def _find_error_message(html: str) -> str:
     return "Brickset rejected the credentials"
 
 
-class Brickset(AuthenticationProvider, ProviderBase, OwnedSetsProvider, ManualProvider):
+class Brickset(AuthenticatedProvider, BaseProvider, OwnedSetsProvider, InstructionsProvider):
     label = "brickset"
 
-    def __init__(self, config: BricksetConfig, session_builder: SessionBuilder) -> None:
+    def __init__(self, config: BricksetConfig, connection_manager: ConnectionManager) -> None:
         self.config: BricksetConfig = config
-        self.session_builder = session_builder
+        self.connection_manager = connection_manager
         self.owned_sets_url = urljoin(self.config.base_url, self.config.owned_sets_url)
         self.instructions_url = urljoin(self.config.base_url, self.config.instructions_url)
 
     def login(self) -> requests.Session:
         "Login to brickset.com and return a session with the auth cookie."
-        session = self.session_builder.session()
+        session = self.connection_manager.session()
 
         login_url = urljoin(self.config.base_url, _LOGIN_URL)
         login_page = session.get(login_url)
@@ -123,6 +123,7 @@ class Brickset(AuthenticationProvider, ProviderBase, OwnedSetsProvider, ManualPr
         ]
 
     def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
+        # Brickset's instructions CSV indexes on the full set number with variant.
         url = self.instructions.get(lego_set.set_number)
         if not url:
             return False
@@ -137,11 +138,11 @@ class Brickset(AuthenticationProvider, ProviderBase, OwnedSetsProvider, ManualPr
         return True
 
     @staticmethod
-    def builder(config: Config, session_builder: SessionBuilder) -> "BricksetBuilder":
-        return BricksetBuilder(config, session_builder)
+    def builder(config: Config, connection_manager: ConnectionManager) -> ProviderBuilder:
+        return BricksetBuilder(config, connection_manager)
 
 
 class BricksetBuilder(ProviderBuilder):
     def build(self) -> Brickset:
         config = require_credentials("brickset", self.config.brickset)
-        return Brickset(config, self.session_builder)
+        return Brickset(config, self.connection_manager)

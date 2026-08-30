@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 
 import pathvalidate
@@ -10,7 +10,6 @@ class LegoSet:
     variant: str
     name: str
     year: str
-    recorded_file_name: str | None = field(default=None, compare=False)
 
     @property
     def set_number(self) -> str:

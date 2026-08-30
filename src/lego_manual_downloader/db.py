@@ -1,4 +1,5 @@
 import json
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -49,7 +50,16 @@ class StoredManual:
         }
 
 
-class ManualDb:
+class InstructionsDb(ABC):
+    @abstractmethod
+    def check(self, lego_set: LegoSet, dry_run: bool) -> ManualStatus: ...
+    @abstractmethod
+    def add_manual(self, lego_set: LegoSet) -> None: ...
+    @abstractmethod
+    def write_db(self) -> None: ...
+
+
+class JsonInstructionsDb(InstructionsDb):
     def __init__(self, download_path: Path, db_file: Path, db: dict[str, object]) -> None:
         self.download_path = download_path
         self.db_file = db_file
@@ -104,7 +114,7 @@ class ManualDb:
             temp_file.write(json.dumps(db_data, indent=2).encode("utf-8"))
 
     @staticmethod
-    def load(download_path: Path, config: DbConfig) -> "ManualDb":
+    def load(download_path: Path, config: DbConfig) -> "JsonInstructionsDb":
         db_path = download_path / config.file
         db = json.loads(db_path.read_text()) if db_path.exists() else {}
-        return ManualDb(download_path, db_path, db)
+        return JsonInstructionsDb(download_path, db_path, db)

@@ -6,13 +6,13 @@ from typing import Protocol, TypeVar, runtime_checkable
 import requests
 
 from lego_manual_downloader.config import Config, CredentialedConfig
-from lego_manual_downloader.http import SessionBuilder
+from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
 
 C = TypeVar("C", bound=CredentialedConfig)
 
 
-class ProviderUnavailable(Exception):
+class ProviderUnavailableError(Exception):
     """The provider is unavailable for future calls.
 
     This is typically the result of a failed login, or similar non-transient
@@ -21,7 +21,7 @@ class ProviderUnavailable(Exception):
 
 
 class ProviderConfigError(Exception):
-    """The current configuration cannot produce this provider."""
+    """The provider could not be instantiated with the current configuration."""
 
 
 def require_credentials(section_name: str, section: C | None) -> C:
@@ -33,7 +33,7 @@ def require_credentials(section_name: str, section: C | None) -> C:
     return section
 
 
-class ProviderBase(ABC):
+class BaseProvider(ABC):
     """Behaviour shared by every provider implementation.
 
     `_available` is a class attribute rather than set in __init__ so that subclasses
@@ -52,7 +52,7 @@ class ProviderBase(ABC):
 
     @staticmethod
     @abstractmethod
-    def builder(config: Config, session_builder: SessionBuilder) -> "ProviderBuilder":
+    def builder(config: Config, connection_manager: ConnectionManager) -> "ProviderBuilder":
         """Return the builder that validates config and constructs this provider."""
         ...
 
@@ -66,7 +66,7 @@ class Provider(Protocol):
 
 
 @runtime_checkable
-class ManualProvider(Provider, Protocol):
+class InstructionsProvider(Provider, Protocol):
     def download_manual(self, lego_set: LegoSet, output_path: Path, dry_run: bool) -> bool:
         """Download the manual for lego_set to output_path, returning whether it was found.
 
@@ -85,18 +85,20 @@ class OwnedSetsProvider(Provider, Protocol):
 
 
 class ProviderBuilder(ABC):
-    def __init__(self, config: Config, session_builder: SessionBuilder) -> None:
+    def __init__(self, config: Config, connection_manager: ConnectionManager) -> None:
         self.config = config
-        self.session_builder = session_builder
+        self.connection_manager = connection_manager
 
     @abstractmethod
-    def build(self) -> ProviderBase: ...
+    def build(self) -> BaseProvider: ...
 
 
-class AuthenticationProvider(ABC):
-    """Perform a login for a provider and return a logged in session
+class AuthenticatedProvider(ABC):
+    """Provides functionality for authenticators that need an authenticated session.
 
-    Handles caching the login result, raising ProviderUnavailable if the login
+    Performs a login for a provider and returns a logged in session.
+
+    Handles caching the login result, raising ProviderUnavailableError if the login
     fails, and returning the session for future calls, ensuring we only try
     to login once per provider instance.
     """
@@ -121,5 +123,5 @@ class AuthenticationProvider(ABC):
     @cached_property
     def session(self) -> requests.Session:
         if isinstance(self._login_result, Exception):
-            raise ProviderUnavailable(f"{self.label} login failed") from self._login_result
+            raise ProviderUnavailableError(f"{self.label} login failed") from self._login_result
         return self._login_result
