@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import ClassVar
@@ -8,6 +9,7 @@ from lego_manual_downloader import config as config_module
 from lego_manual_downloader.config import BricksetConfig, Config, HttpConfig, PeeronConfig
 from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
+from lego_manual_downloader.log import PACKAGE_LOGGER
 from lego_manual_downloader.providers import BaseProvider, ProviderBuilder
 
 BRICKSET_BASE = "https://brickset.example"
@@ -16,11 +18,34 @@ PEERON_SCANS = "http://peeron.example/scans/"
 PEERON_THUMBS = "http://thumbs.peeron.example/thumbs"
 
 
+def records_at(
+    caplog: pytest.LogCaptureFixture, level: int, fragment: str
+) -> list[logging.LogRecord]:
+    """Records logged at exactly `level` whose message contains `fragment`.
+
+    Severity is part of the contract -- an error quietly demoted to debug would
+    vanish from a default run -- so assertions name the level they expect.
+    """
+    return [r for r in caplog.records if level == r.levelno and fragment in r.getMessage()]
+
+
 @pytest.fixture(autouse=True)
 def isolate_default_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Never let a test read the developer's real ~/.config file."""
     monkeypatch.setattr(config_module, "_DEFAULT_CONFIG_PATH", tmp_path / "absent" / "config.toml")
     yield
+
+
+@pytest.fixture(autouse=True)
+def reset_logging() -> Iterator[None]:
+    """Let `caplog` see every record, and undo what `log.configure` did to the global logger."""
+    logger = logging.getLogger(PACKAGE_LOGGER)
+    logger.setLevel(logging.DEBUG)
+    yield
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    logger.setLevel(logging.NOTSET)
 
 
 @pytest.fixture

@@ -1,4 +1,5 @@
 import io
+import logging
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
@@ -17,6 +18,8 @@ from lego_manual_downloader.providers import (
     ProviderBuilder,
     require_credentials,
 )
+
+logger = logging.getLogger(__name__)
 
 _AUTH_COOKIE = "PeeronSID"
 
@@ -95,10 +98,12 @@ class Peeron(AuthenticatedProvider, BaseProvider, InstructionsProvider):
         # Peeron indexes by the base set number, not including variant.
         page_scan_urls = self.get_page_scan_urls(lego_set.number)
         if not page_scan_urls:
-            print(f"{self.label}: no images found for {lego_set.set_number}")
+            logger.warning("%s: no images found for %s", self.label, lego_set.set_number)
             return False
         if dry_run:
-            print(f"{self.label}: dry run: would download manual for {lego_set.set_number}")
+            logger.info(
+                "%s: dry run: would download manual for %s", self.label, lego_set.set_number
+            )
             return True
         self.download_pdf(page_scan_urls, output_path)
         return True

@@ -1,8 +1,9 @@
+import logging
 from pathlib import Path
 
 import pytest
 
-from conftest import ONE, FakeBoth, FakeManualOnly, SetsOnlyProvider, UnbuiltProvider
+from conftest import ONE, FakeBoth, FakeManualOnly, SetsOnlyProvider, UnbuiltProvider, records_at
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.provider_chain import InstructionsProviderChain, SetsProviderChain
 from lego_manual_downloader.providers import BaseProvider, ProviderUnavailableError
@@ -60,31 +61,30 @@ class TestRoleSelection:
         assert InstructionsProviderChain._is_valid_provider(FakeManualOnly())
         assert not SetsProviderChain._is_valid_provider(FakeManualOnly())
 
-    def test_wrong_role_warns_once(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_wrong_role_warns_once(self, caplog: pytest.LogCaptureFixture) -> None:
         instances: dict[str, BaseProvider] = {"both": FakeBoth(), "manualonly": FakeManualOnly()}
         chain = SetsProviderChain.create(["both", "manualonly"], instances)
 
-        output = capsys.readouterr().out
-        assert output.count("not a valid owned sets provider") == 1
+        assert len(records_at(caplog, logging.WARNING, "not a valid owned sets provider")) == 1
         assert [type(p) for p in chain.providers] == [FakeBoth]
 
     def test_a_sets_only_provider_is_rejected_by_the_manual_chain(
-        self, capsys: pytest.CaptureFixture[str]
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The mirror of the above: each chain names its own role in the warning."""
         instances: dict[str, BaseProvider] = {"sets": SetsOnlyProvider(), "both": FakeBoth()}
         chain = InstructionsProviderChain.create(["sets", "both"], instances)
 
-        assert "not a valid manual provider" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "not a valid manual provider")
         assert [type(p) for p in chain.providers] == [FakeBoth]
 
     def test_an_unbuilt_provider_is_skipped_silently(
-        self, capsys: pytest.CaptureFixture[str]
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A provider that failed to build was already reported by the builder."""
         chain = SetsProviderChain.create(["absent"], {})
         assert chain.providers == []
-        assert capsys.readouterr().out == ""
+        assert caplog.records == []
 
 
 class TestGetOwnedSets:
@@ -102,10 +102,10 @@ class TestGetOwnedSets:
         chain = SetsProviderChain([Empty(), FakeBoth()])
         assert chain.get_owned_sets() == []
 
-    def test_falls_through_a_raising_provider(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_falls_through_a_raising_provider(self, caplog: pytest.LogCaptureFixture) -> None:
         chain = SetsProviderChain([Boom(), FakeBoth()])
         assert chain.get_owned_sets() == [ONE]
-        assert "network down" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "network down")
 
     def test_returns_empty_when_every_provider_fails(self) -> None:
         assert SetsProviderChain([Boom()]).get_owned_sets() == []
@@ -129,19 +129,18 @@ class TestDownloadManual:
         assert succeeding.downloads == ["1"]
 
     def test_falls_through_a_raising_provider(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         chain = InstructionsProviderChain([Boom(), FakeBoth()])
         assert chain.download_manual(ONE, tmp_path / "x.pdf", dry_run=False)
-        assert "timeout" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "timeout")
 
     def test_error_message_names_the_provider_class(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         InstructionsProviderChain([Boom()]).download_manual(ONE, tmp_path / "x", dry_run=False)
-        output = capsys.readouterr().out
-        assert "Boom" in output
-        assert "object at 0x" not in output
+        assert records_at(caplog, logging.WARNING, "Boom")
+        assert "object at 0x" not in caplog.text
 
     def test_returns_false_when_nothing_succeeds(self, tmp_path: Path) -> None:
         assert not InstructionsProviderChain([FakeManualOnly()]).download_manual(
@@ -178,12 +177,12 @@ class TestRetiresUnavailableProviders:
         assert dead.manual_calls == 1
 
     def test_unavailable_provider_is_reported_once(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         chain = InstructionsProviderChain([Unavailable()])
         for n in range(5):
             chain.download_manual(a_set(n), tmp_path / "x.pdf", dry_run=False)
-        assert capsys.readouterr().out.count("Dropping Unavailable for this run") == 1
+        assert len(records_at(caplog, logging.WARNING, "Dropping Unavailable for this run")) == 1
 
     def test_transient_failures_do_not_retire_the_provider(self, tmp_path: Path) -> None:
         flaky = Transient()

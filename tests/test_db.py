@@ -1,8 +1,10 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
+from conftest import records_at
 from lego_manual_downloader.config import DbConfig
 from lego_manual_downloader.db import JsonInstructionsDb, ManualStatus, StoredManual
 from lego_manual_downloader.lego import LegoSet
@@ -116,14 +118,14 @@ class TestStoredManual:
 
 class TestUnreadableEntries:
     def test_an_entry_missing_a_field_is_dropped_with_a_warning(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         db = JsonInstructionsDb(tmp_path, tmp_path / "_lmd_db.json", {"1-1": {"number": "1"}})
         assert db.db == {}
-        assert "Ignoring unreadable database entry '1-1'" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "Ignoring unreadable database entry '1-1'")
 
     def test_a_legacy_entry_without_a_variant_is_dropped_with_a_warning(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The pre-variant on-disk format, keyed by bare set number."""
         legacy = {
@@ -138,14 +140,14 @@ class TestUnreadableEntries:
 
         db = JsonInstructionsDb.load(tmp_path, DbConfig())
         assert db.db == {}
-        assert "Ignoring unreadable database entry '1478'" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "Ignoring unreadable database entry '1478'")
 
     def test_a_non_dict_entry_is_dropped_with_a_warning(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         db = JsonInstructionsDb(tmp_path, tmp_path / "_lmd_db.json", {"1-1": "not an entry"})
         assert db.db == {}
-        assert "Ignoring unreadable database entry '1-1'" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "Ignoring unreadable database entry '1-1'")
 
     def test_a_dropped_entry_falls_through_to_the_disk_check(self, tmp_path: Path) -> None:
         """Dropping a record must not hide a manual that is actually there."""
@@ -235,14 +237,14 @@ class TestCheck:
 
 class TestCheckDryRun:
     def test_a_rename_is_reported_but_not_performed(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         db = _db_recording(tmp_path, LEGACY_NAME, on_disk=True)
 
         assert db.check(FALCON, dry_run=True) is ManualStatus.RENAMED
         assert (tmp_path / LEGACY_NAME).exists()
         assert not (tmp_path / FALCON.file_name).exists()
-        assert "Renaming manual" in capsys.readouterr().out
+        assert records_at(caplog, logging.INFO, "Renaming manual")
 
     def test_the_recorded_name_is_left_alone(self, tmp_path: Path) -> None:
         db = _db_recording(tmp_path, LEGACY_NAME, on_disk=True)
@@ -252,7 +254,7 @@ class TestCheckDryRun:
 
 class TestRenameFailures:
     def test_a_collision_warns_and_moves_nothing(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Never destroy a manual that is already sitting at the target name."""
         db = _db_recording(tmp_path, LEGACY_NAME, on_disk=True)
@@ -262,7 +264,7 @@ class TestRenameFailures:
 
         assert (tmp_path / LEGACY_NAME).exists()
         assert (tmp_path / FALCON.file_name).read_bytes() == b"%PDF-1.4 other"
-        assert "target already exists" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "target already exists")
 
     def test_a_collision_leaves_the_db_pointing_at_the_real_file(self, tmp_path: Path) -> None:
         db = _db_recording(tmp_path, LEGACY_NAME, on_disk=True)
@@ -274,13 +276,13 @@ class TestRenameFailures:
         assert written["10179-1"]["file"] == LEGACY_NAME
 
     def test_an_unwritable_directory_warns_rather_than_raising(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         db = _db_recording(tmp_path, LEGACY_NAME, on_disk=True)
         tmp_path.chmod(0o500)
         try:
             db.check(FALCON, dry_run=False)
-            assert "Could not rename" in capsys.readouterr().out
+            assert records_at(caplog, logging.WARNING, "Could not rename")
         finally:
             tmp_path.chmod(0o700)
 

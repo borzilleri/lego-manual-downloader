@@ -4,6 +4,8 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, TypeVar, Union, cast, get_args, get_origin, get_type_hints
 
+from lego_manual_downloader.log import DEFAULT_LEVEL, LEVELS
+
 _DEFAULT_CONFIG_PATH = Path("~/.config/lego-manual-downloader/config.toml")
 
 T = TypeVar("T")
@@ -83,6 +85,24 @@ class ProvidersConfig:
 
 
 @dataclass(frozen=True)
+class LoggingConfig:
+    """Defaults for console output; `--log-level` and `--log-file` override these."""
+
+    level: str = DEFAULT_LEVEL
+    file: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.level not in LEVELS:
+            raise ConfigError(
+                f"[logging] unknown level '{self.level}'; expected one of: {', '.join(LEVELS)}"
+            )
+
+    @property
+    def path(self) -> Path | None:
+        return Path(self.file) if self.file else None
+
+
+@dataclass(frozen=True)
 class DbConfig:
     file: str = "_lmd_db.json"
 
@@ -116,6 +136,7 @@ class Config:
     brickset: BricksetConfig | None = None
     peeron: PeeronConfig | None = None
     http: HttpConfig = HttpConfig()
+    logging: LoggingConfig = LoggingConfig()
 
     @staticmethod
     def load(path: Path | None = None) -> "Config":

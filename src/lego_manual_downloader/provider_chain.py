@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Generic, TypeGuard, TypeVar
@@ -10,6 +11,8 @@ from lego_manual_downloader.providers import (
     Provider,
     ProviderUnavailableError,
 )
+
+logger = logging.getLogger(__name__)
 
 P = TypeVar("P")
 PT = TypeVar("PT", bound=Provider)
@@ -34,7 +37,7 @@ def _select_providers(
         if is_role(provider):
             selected.append(provider)
         else:
-            print(f"Warning: Provider '{name}' is not a valid {label} provider.")
+            logger.warning("Provider '%s' is not a valid %s provider.", name, label)
     return selected
 
 
@@ -66,7 +69,7 @@ class SetsProviderChain(BaseProviderChain[OwnedSetsProvider]):
             except ProviderUnavailableError as e:
                 provider.retire(e)
             except Exception as e:
-                print(f"Error fetching owned sets from {type(provider).__name__}: {e}")
+                logger.warning("Error fetching owned sets from %s: %s", type(provider).__name__, e)
         return []
 
     @staticmethod
@@ -106,7 +109,9 @@ class InstructionsProviderChain(BaseProviderChain[InstructionsProvider]):
                 provider.retire(e)
             except Exception as e:
                 name = type(provider).__name__
-                print(f"Error downloading manual for {lego_set.set_number} from {name}: {e}")
+                logger.warning(
+                    "Error downloading manual for %s from %s: %s", lego_set.set_number, name, e
+                )
         return False
 
     @staticmethod
