@@ -1,4 +1,5 @@
 import csv
+import logging
 from functools import cached_property
 from pathlib import Path
 from urllib.parse import urljoin
@@ -18,6 +19,8 @@ from lego_manual_downloader.providers import (
     ProviderBuilder,
     require_credentials,
 )
+
+logger = logging.getLogger(__name__)
 
 _LOGIN_URL = "/login"
 _LOGIN_FORM_ID = "aspnetForm"
@@ -128,7 +131,9 @@ class Brickset(AuthenticatedProvider, BaseProvider, OwnedSetsProvider, Instructi
         if not url:
             return False
         if dry_run:
-            print(f"{self.label}: dry run: would download manual for {lego_set.set_number}")
+            logger.info(
+                "%s: dry run: would download manual for %s", self.label, lego_set.set_number
+            )
             return True
         with self.session.get(url, stream=True) as r:
             r.raise_for_status()

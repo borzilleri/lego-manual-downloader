@@ -131,6 +131,14 @@ class TestErrors:
             Config.load(path)
         assert str(path) in str(excinfo.value)
 
+    def test_an_unknown_log_level_is_an_error(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError, match=re.escape("[logging] unknown level 'loud'")):
+            Config.load(write(tmp_path, '[logging]\nlevel = "loud"\n'))
+
+    def test_a_known_log_level_is_accepted(self, tmp_path: Path) -> None:
+        config = Config.load(write(tmp_path, '[logging]\nlevel = "debug"\n'))
+        assert config.logging.level == "debug"
+
     def test_explicitly_named_missing_file_is_an_error(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError, match="config file not found"):
             Config.load(tmp_path / "absent.toml")

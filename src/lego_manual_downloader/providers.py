@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from functools import cached_property
 from pathlib import Path
@@ -8,6 +9,8 @@ import requests
 from lego_manual_downloader.config import Config, CredentialedConfig
 from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
+
+logger = logging.getLogger(__name__)
 
 C = TypeVar("C", bound=CredentialedConfig)
 
@@ -47,7 +50,7 @@ class BaseProvider(ABC):
 
     def retire(self, reason: Exception) -> None:
         """Mark this provider as unavailable for future calls."""
-        print(f"Dropping {type(self).__name__} for this run: {reason}")
+        logger.warning("Dropping %s for this run: %s", type(self).__name__, reason)
         self._available = False
 
     @staticmethod
@@ -117,7 +120,7 @@ class AuthenticatedProvider(ABC):
         try:
             return self.login()
         except Exception as e:
-            print(f"{self.label}: login failed: {e}")
+            logger.warning("%s: login failed: %s", self.label, e)
             return e
 
     @cached_property

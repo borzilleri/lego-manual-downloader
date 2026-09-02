@@ -1,8 +1,11 @@
+import logging
 from pathlib import Path
 
 from lego_manual_downloader.db import InstructionsDb, ManualStatus
 from lego_manual_downloader.lego import LegoSet
 from lego_manual_downloader.provider_chain import InstructionsProviderChain, SetsProviderChain
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessingException(Exception):
@@ -16,14 +19,14 @@ def process_set(
     instructions_provider_chain: InstructionsProviderChain,
     dry_run: bool,
 ) -> None:
-    print(f"Processing {lego_set}")
+    logger.debug("Processing %s", lego_set)
     status = db.check(lego_set, dry_run=dry_run)
     if status == ManualStatus.PRESENT:
-        print(f"Manual for {lego_set} already exists, skipping.")
+        logger.info("Manual for %s already exists, skipping.", lego_set)
     elif status == ManualStatus.RENAMED:
-        print(f"Manual for {lego_set} found, renamed to {lego_set.file_name}.")
+        logger.info("Manual for %s found, renamed to %s.", lego_set, lego_set.file_name)
     elif status == ManualStatus.MISSING:
-        print(f"Manual for {lego_set} is missing, downloading.")
+        logger.info("Manual for %s is missing, downloading.", lego_set)
         output_path = download_path / lego_set.file_name
         if instructions_provider_chain.download_manual(lego_set, output_path, dry_run=dry_run):
             if not dry_run:
@@ -41,18 +44,18 @@ def download_instruction_manuals(
 ) -> bool:
     """Download instruction manuals for all owned sets."""
     if not sets_provider_chain.has_providers():
-        print("No usable owned sets providers, stopping.")
+        logger.error("No usable owned sets providers, stopping.")
         return False
     lego_sets = sets_provider_chain.get_owned_sets()
     success = True
     if not lego_sets:
-        print("No owned sets found.")
+        logger.info("No owned sets found.")
         return success
     try:
         for lego_set in lego_sets:
             try:
                 if not instructions_provider_chain.has_providers():
-                    print("No usable manual providers left, stopping.")
+                    logger.error("No usable manual providers left, stopping.")
                     success = False
                     break
                 try:
@@ -64,10 +67,10 @@ def download_instruction_manuals(
                         dry_run=dry_run,
                     )
                 except ProcessingException as e:
-                    print(e)
+                    logger.error("%s", e)
                     success = False
             except Exception as e:
-                print(f"Error processing owned sets: {e}")
+                logger.error("Error processing owned sets: %s", e)
                 success = False
     finally:
         if not dry_run:

@@ -30,3 +30,8 @@ password = "your_peeron_password"
 
 # [db]
 # file = "_lmd_db.json"
+
+# Console output. --log-level and --log-file override these.
+# [logging]
+# level = "info"   # debug, info, warning, or error
+# file = "~/.local/state/lego-manual-downloader/run.log"

@@ -1,4 +1,5 @@
 import json
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -9,6 +10,8 @@ import pathvalidate
 from lego_manual_downloader.config import DbConfig
 from lego_manual_downloader.files import atomic_write
 from lego_manual_downloader.lego import LegoSet
+
+logger = logging.getLogger(__name__)
 
 
 class ManualStatus(Enum):
@@ -67,7 +70,7 @@ class JsonInstructionsDb(InstructionsDb):
         for key, entry in db.items():
             stored_manual = StoredManual.from_dict(entry)
             if stored_manual is None:
-                print(f"Warning: Ignoring unreadable database entry '{key}'.")
+                logger.warning("Ignoring unreadable database entry '%s'.", key)
                 continue
             self.db[stored_manual.lego_set.set_number] = stored_manual
 
@@ -96,15 +99,17 @@ class JsonInstructionsDb(InstructionsDb):
         source = self.download_path / self.db[lego_set.set_number].file_name
         target = self.download_path / lego_set.file_name
         if target.exists():
-            print(f"Warning: Cannot rename {source.name} to {target.name}, target already exists.")
+            logger.warning(
+                "Cannot rename %s to %s, target already exists.", source.name, target.name
+            )
             return
-        print(f"Renaming manual for {lego_set} to {target.name}.")
+        logger.info("Renaming manual for %s to %s.", lego_set, target.name)
         if dry_run:
             return
         try:
             source.rename(target)
         except OSError as e:
-            print(f"Warning: Could not rename {source.name} to {target.name}: {e}")
+            logger.warning("Could not rename %s to %s: %s", source.name, target.name, e)
             return
         self.db[lego_set.set_number] = StoredManual(lego_set=lego_set, file_name=lego_set.file_name)
 

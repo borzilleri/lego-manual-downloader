@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -6,7 +7,7 @@ import pytest
 import requests
 import responses
 
-from conftest import BRICKSET_BASE, INSTRUCTIONS_CSV, LOGIN_FORM_HTML, OWNED_SETS_CSV
+from conftest import BRICKSET_BASE, INSTRUCTIONS_CSV, LOGIN_FORM_HTML, OWNED_SETS_CSV, records_at
 from lego_manual_downloader.brickset import (
     Brickset,
     BricksetBuilder,
@@ -264,7 +265,7 @@ class TestDownloadManual:
 
 class TestDownloadManualDryRun:
     def test_reports_the_manual_without_fetching_or_writing(
-        self, brickset: Brickset, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, brickset: Brickset, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         session = FakeSession({INSTRUCTIONS_URL: FakeResponse(text=INSTRUCTIONS_CSV)})
         brickset._login_result = session  # type: ignore[assignment]
@@ -275,7 +276,9 @@ class TestDownloadManualDryRun:
         )
         assert not output.exists()
         assert session.requested == [INSTRUCTIONS_URL]
-        assert "brickset: dry run: would download manual for 10179-1" in capsys.readouterr().out
+        assert records_at(
+            caplog, logging.INFO, "brickset: dry run: would download manual for 10179-1"
+        )
 
     def test_unknown_set_still_returns_false(self, brickset: Brickset, tmp_path: Path) -> None:
         brickset._login_result = FakeSession(  # type: ignore[assignment]
@@ -336,13 +339,13 @@ class TestLoginIsAttemptedOnce:
         assert len(calls) == 1
 
     def test_failure_is_reported_once_not_per_access(
-        self, brickset: Brickset, capsys: pytest.CaptureFixture[str]
+        self, brickset: Brickset, caplog: pytest.LogCaptureFixture
     ) -> None:
         self.counting_login(brickset, requests.ConnectionError("offline"))
         for _ in range(5):
             with pytest.raises(ProviderUnavailableError):
                 _ = brickset.session
-        assert capsys.readouterr().out.count("brickset: login failed") == 1
+        assert len(records_at(caplog, logging.WARNING, "brickset: login failed")) == 1
 
     def test_download_manual_raises_unavailable_without_retrying(
         self, brickset: Brickset, tmp_path: Path

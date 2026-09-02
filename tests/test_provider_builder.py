@@ -1,8 +1,9 @@
+import logging
 from pathlib import Path
 
 import pytest
 
-from conftest import FakeBoth, FakeManualOnly
+from conftest import FakeBoth, FakeManualOnly, records_at
 from lego_manual_downloader import provider_builder
 from lego_manual_downloader.config import BricksetConfig, Config, PeeronConfig, ProvidersConfig
 from lego_manual_downloader.http import ConnectionManager
@@ -57,18 +58,18 @@ class TestCreateProviders:
         assert FakeBoth.instances_created == 1
 
     def test_unknown_name_warns_and_is_skipped(
-        self, connection_manager: ConnectionManager, capsys: pytest.CaptureFixture[str]
+        self, connection_manager: ConnectionManager, caplog: pytest.LogCaptureFixture
     ) -> None:
         create_providers(_config_with(("both",), ("both", "nosuch")), connection_manager)
-        assert "Unknown provider 'nosuch'" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "Unknown provider 'nosuch'")
 
     def test_unconfigurable_provider_is_skipped_not_fatal(
-        self, connection_manager: ConnectionManager, capsys: pytest.CaptureFixture[str]
+        self, connection_manager: ConnectionManager, caplog: pytest.LogCaptureFixture
     ) -> None:
         providers = create_providers(
             _config_with(("both",), ("both", "broken")), connection_manager
         )
-        assert "Failed to build provider 'broken'" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "Failed to build provider 'broken'")
         assert list(providers) == ["both"]
 
     def test_no_usable_provider_at_all_raises(self, connection_manager: ConnectionManager) -> None:
@@ -108,10 +109,10 @@ def test_chains_can_be_built_from_the_real_providers(
 
 
 def test_a_provider_missing_its_section_is_skipped_with_a_warning(
-    connection_manager: ConnectionManager, capsys: pytest.CaptureFixture[str]
+    connection_manager: ConnectionManager, caplog: pytest.LogCaptureFixture
 ) -> None:
     config = Config(brickset=BricksetConfig(username="u", password="p"))
     providers = create_providers(config, connection_manager)
 
-    assert "Failed to build provider 'peeron'" in capsys.readouterr().out
+    assert records_at(caplog, logging.WARNING, "Failed to build provider 'peeron'")
     assert list(providers) == ["brickset"]

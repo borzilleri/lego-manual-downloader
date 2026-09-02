@@ -1,4 +1,5 @@
 import io
+import logging
 from pathlib import Path
 
 import pytest
@@ -6,7 +7,7 @@ import requests
 import responses
 from PIL import Image
 
-from conftest import PEERON_LOGIN, PEERON_SCANS, PEERON_THUMBS
+from conftest import PEERON_LOGIN, PEERON_SCANS, PEERON_THUMBS, records_at
 from lego_manual_downloader.config import Config, PeeronConfig
 from lego_manual_downloader.http import ConnectionManager
 from lego_manual_downloader.lego import LegoSet
@@ -177,7 +178,7 @@ class TestDownloadPdf:
 
 class TestDownloadManual:
     def test_returns_false_and_writes_nothing_when_no_scans(
-        self, peeron: Peeron, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, peeron: Peeron, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
         output = tmp_path / "manual.pdf"
@@ -185,7 +186,7 @@ class TestDownloadManual:
             LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=False
         )
         assert not output.exists()
-        assert "no images found" in capsys.readouterr().out
+        assert records_at(caplog, logging.WARNING, "no images found")
 
     def test_writes_a_pdf_and_reports_success(self, peeron: Peeron, tmp_path: Path) -> None:
         thumb = f"{PEERON_THUMBS}/10179/1.png"
@@ -205,7 +206,7 @@ class TestDownloadManual:
 
 class TestDownloadManualDryRun:
     def test_reports_the_manual_without_fetching_scans_or_writing(
-        self, peeron: Peeron, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, peeron: Peeron, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         thumb = f"{PEERON_THUMBS}/10179/1.png"
         session = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page(thumb))})
@@ -215,7 +216,9 @@ class TestDownloadManualDryRun:
         assert peeron.download_manual(LegoSet("10179", "1", "Falcon", "2007"), output, dry_run=True)
         assert not output.exists()
         assert session.requested == [SET_PAGE_URL]
-        assert "peeron: dry run: would download manual for 10179-1" in capsys.readouterr().out
+        assert records_at(
+            caplog, logging.INFO, "peeron: dry run: would download manual for 10179-1"
+        )
 
     def test_returns_false_when_no_scans(self, peeron: Peeron, tmp_path: Path) -> None:
         peeron._login_result = FakeSession({SET_PAGE_URL: FakeResponse(text=scans_page())})  # type: ignore[assignment]
@@ -266,13 +269,13 @@ class TestLoginIsAttemptedOnce:
         assert len(calls) == 1
 
     def test_failure_is_reported_once_not_per_access(
-        self, peeron: Peeron, capsys: pytest.CaptureFixture[str]
+        self, peeron: Peeron, caplog: pytest.LogCaptureFixture
     ) -> None:
         self.counting_login(peeron, requests.ConnectionError("offline"))
         for _ in range(5):
             with pytest.raises(ProviderUnavailableError):
                 _ = peeron.session
-        assert capsys.readouterr().out.count("peeron: login failed") == 1
+        assert len(records_at(caplog, logging.WARNING, "peeron: login failed")) == 1
 
     def test_download_manual_raises_unavailable_without_retrying(
         self, peeron: Peeron, tmp_path: Path

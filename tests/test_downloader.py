@@ -1,9 +1,10 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
-from conftest import LEGACY_NAME, SETS, StubProvider, UnbuiltProvider
+from conftest import LEGACY_NAME, SETS, StubProvider, UnbuiltProvider, records_at
 from lego_manual_downloader.config import DbConfig
 from lego_manual_downloader.db import JsonInstructionsDb, ManualStatus
 from lego_manual_downloader.downloader import download_instruction_manuals
@@ -71,10 +72,10 @@ class TestDownloadInstructionManuals:
         tmp_path: Path,
         db: JsonInstructionsDb,
         stub_chains: Chains,
-        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         assert not download_instruction_manuals(tmp_path, db, *stub_chains, dry_run=False)
-        assert "Unable to download manual for 9999" in capsys.readouterr().out
+        assert records_at(caplog, logging.ERROR, "Unable to download manual for 9999")
 
     def test_a_fully_successful_run_reports_success(
         self, tmp_path: Path, db: JsonInstructionsDb
@@ -140,7 +141,7 @@ class TestDownloadInstructionManuals:
         db: JsonInstructionsDb,
         stub_chains: Chains,
         monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """One unreadable set must not cost the user the whole run."""
         real_check = JsonInstructionsDb.check
@@ -154,19 +155,19 @@ class TestDownloadInstructionManuals:
 
         assert not download_instruction_manuals(tmp_path, db, *stub_chains, dry_run=False)
 
-        assert "disk gone" in capsys.readouterr().out
+        assert records_at(caplog, logging.ERROR, "disk gone")
         assert (tmp_path / SETS[1].file_name).exists()
 
     def test_owning_no_sets_reports_and_writes_nothing(
-        self, tmp_path: Path, db: JsonInstructionsDb, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, db: JsonInstructionsDb, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Owning nothing is a valid outcome, not a failure."""
         assert download_instruction_manuals(tmp_path, db, *_stub_chains([]), dry_run=False)
-        assert "No owned sets found." in capsys.readouterr().out
+        assert records_at(caplog, logging.INFO, "No owned sets found.")
         assert not (tmp_path / "_lmd_db.json").exists()
 
     def test_no_sets_provider_stops_the_run(
-        self, tmp_path: Path, db: JsonInstructionsDb, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, db: JsonInstructionsDb, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Without a usable owned-sets provider there is nothing to work from."""
         assert not download_instruction_manuals(
@@ -176,7 +177,7 @@ class TestDownloadInstructionManuals:
             InstructionsProviderChain([StubProvider()]),
             dry_run=False,
         )
-        assert "No usable owned sets providers, stopping." in capsys.readouterr().out
+        assert records_at(caplog, logging.ERROR, "No usable owned sets providers, stopping.")
         assert not (tmp_path / "_lmd_db.json").exists()
 
 
@@ -212,13 +213,13 @@ class TestDryRun:
         tmp_path: Path,
         db: JsonInstructionsDb,
         stub_chains: Chains,
-        capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         download_instruction_manuals(tmp_path, db, *stub_chains, dry_run=True)
-        assert "Unable to download manual for 9999" in capsys.readouterr().out
+        assert records_at(caplog, logging.ERROR, "Unable to download manual for 9999")
 
     def test_already_downloaded_sets_are_still_skipped(
-        self, tmp_path: Path, stub_chains: Chains, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, stub_chains: Chains, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A dry run should report only the work a real run would do."""
         db = JsonInstructionsDb.load(tmp_path, DbConfig())
@@ -226,10 +227,10 @@ class TestDryRun:
         (tmp_path / SETS[0].file_name).write_bytes(b"%PDF-1.4 stub")
 
         download_instruction_manuals(tmp_path, db, *stub_chains, dry_run=True)
-        assert "already exists, skipping" in capsys.readouterr().out
+        assert records_at(caplog, logging.INFO, "already exists, skipping")
 
     def test_a_rename_is_reported_but_not_performed(
-        self, tmp_path: Path, stub_chains: Chains, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, stub_chains: Chains, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A dry run must not touch the download directory, renames included."""
         db = _db_with_manual_under_legacy_name(tmp_path)
@@ -237,7 +238,9 @@ class TestDryRun:
 
         download_instruction_manuals(tmp_path, db, *stub_chains, dry_run=True)
 
-        assert f"Renaming manual for {SETS[0]} to {SETS[0].file_name}." in capsys.readouterr().out
+        assert records_at(
+            caplog, logging.INFO, f"Renaming manual for {SETS[0]} to {SETS[0].file_name}."
+        )
         assert (tmp_path / LEGACY_NAME).exists()
         assert not (tmp_path / SETS[0].file_name).exists()
         assert (tmp_path / "_lmd_db.json").read_text() == before
@@ -245,7 +248,7 @@ class TestDryRun:
 
 class TestStopsWhenProvidersExhausted:
     def test_loop_exits_once_the_last_provider_retires(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         many = [LegoSet(str(n), "1", f"Set {n}", "2001") for n in range(20)]
         sets_chain = SetsProviderChain([StubProvider(many)])
@@ -259,10 +262,9 @@ class TestStopsWhenProvidersExhausted:
             dry_run=False,
         )
 
-        out = capsys.readouterr().out
-        assert "No usable manual providers left, stopping." in out
-        assert out.count("Unable to download manual") == 1
-        assert out.count("Processing") == 1
+        assert records_at(caplog, logging.ERROR, "No usable manual providers left, stopping.")
+        assert len(records_at(caplog, logging.ERROR, "Unable to download manual")) == 1
+        assert len(records_at(caplog, logging.DEBUG, "Processing")) == 1
 
     def test_database_is_still_written_after_an_early_exit(self, tmp_path: Path) -> None:
         sets_chain = SetsProviderChain([StubProvider()])
@@ -274,7 +276,7 @@ class TestStopsWhenProvidersExhausted:
         assert (tmp_path / "_lmd_db.json").exists()
 
     def test_already_recorded_sets_do_not_block_the_exit(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The check sits at the top of the loop, so a run of skipped sets exits at once."""
         sets_chain = SetsProviderChain([StubProvider()])
@@ -287,6 +289,5 @@ class TestStopsWhenProvidersExhausted:
             dry_run=False,
         )
 
-        out = capsys.readouterr().out
-        assert "No usable manual providers left, stopping." in out
-        assert "Processing" not in out
+        assert records_at(caplog, logging.ERROR, "No usable manual providers left, stopping.")
+        assert not records_at(caplog, logging.DEBUG, "Processing")
